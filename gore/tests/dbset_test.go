@@ -17,6 +17,18 @@ func TestDbSetQuery(t *testing.T) {
 	}
 }
 
+func TestDbSetQueryFromWhereField(t *testing.T) {
+	ctx := newContext()
+	set := api.Set[User](ctx)
+	ast := set.Query().From("users").WhereField("name", "=", "alice").ToAST()
+	if ast.Table != "users" {
+		t.Fatalf("expected table users, got %s", ast.Table)
+	}
+	if len(ast.Where) != 1 {
+		t.Fatalf("expected 1 where clause, got %d", len(ast.Where))
+	}
+}
+
 func TestDbSetAttachAddRemove(t *testing.T) {
 	ctx := newContext()
 	set := api.Set[User](ctx)
