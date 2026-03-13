@@ -125,6 +125,11 @@ func runCheck(args []string) error {
 
 	engine := advisor.NewEngine(
 		rules.NewLeftmostMatchRule(),
+		rules.NewFunctionIndexRule(),
+		rules.NewTypeMismatchRule(),
+		rules.NewLikePrefixRule(),
+		rules.NewOrderByIndexRule(),
+		rules.NewJoinIndexRule(),
 	)
 
 	var suggestions []advisor.Suggestion
@@ -254,6 +259,16 @@ func buildQueryMetadata(call *ast.CallExpr, fset *token.FileSet, path string, co
 			if ok {
 				meta.Conditions = append(meta.Conditions, cond)
 			}
+		case "WhereIn":
+			cond, ok := parseWhereIn(item.args, consts)
+			if ok {
+				meta.Conditions = append(meta.Conditions, cond)
+			}
+		case "WhereLike":
+			cond, ok := parseWhereLike(item.args, consts)
+			if ok {
+				meta.Conditions = append(meta.Conditions, cond)
+			}
 		case "OrderBy":
 			if v, ok := evalString(item.args, 0, consts); ok {
 				field, dir := parseOrderBy(v)
@@ -328,6 +343,47 @@ func parseWhereField(args []ast.Expr, consts map[string]literalValue) (advisor.C
 	return advisor.Condition{
 		Field:     field,
 		Operator:  op,
+		Value:     value,
+		ValueType: valueType,
+	}, true
+}
+func parseWhereIn(args []ast.Expr, consts map[string]literalValue) (advisor.Condition, bool) {
+	if len(args) < 2 {
+		return advisor.Condition{}, false
+	}
+	field, ok := evalString(args, 0, consts)
+	if !ok {
+		return advisor.Condition{}, false
+	}
+	value, valueType, ok := evalAny(args[1], consts)
+	if !ok {
+		return advisor.Condition{}, false
+	}
+
+	return advisor.Condition{
+		Field:     field,
+		Operator:  "IN",
+		Value:     value,
+		ValueType: valueType,
+	}, true
+}
+
+func parseWhereLike(args []ast.Expr, consts map[string]literalValue) (advisor.Condition, bool) {
+	if len(args) < 2 {
+		return advisor.Condition{}, false
+	}
+	field, ok := evalString(args, 0, consts)
+	if !ok {
+		return advisor.Condition{}, false
+	}
+	value, valueType, ok := evalAny(args[1], consts)
+	if !ok {
+		return advisor.Condition{}, false
+	}
+
+	return advisor.Condition{
+		Field:     field,
+		Operator:  "LIKE",
 		Value:     value,
 		ValueType: valueType,
 	}, true
