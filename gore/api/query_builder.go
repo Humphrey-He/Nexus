@@ -2,6 +2,7 @@ package api
 
 import (
 	"fmt"
+	"strings"
 
 	"gore/dialect"
 )
@@ -45,6 +46,33 @@ func (q *Query[T]) WhereField(field, op string, value any) *Query[T] {
 		ast.Where = append(ast.Where, fmt.Sprintf("%s %s ?", field, op))
 	})
 	_ = value
+	return q
+}
+
+// WhereIn appends an IN predicate for static analysis.
+func (q *Query[T]) WhereIn(field string, values ...any) *Query[T] {
+	if field == "" || len(values) == 0 {
+		return q
+	}
+
+	placeholders := strings.Repeat("?,", len(values))
+	placeholders = strings.TrimRight(placeholders, ",")
+
+	q.where = append(q.where, func(ast *dialect.QueryAST) {
+		ast.Where = append(ast.Where, fmt.Sprintf("%s IN (%s)", field, placeholders))
+	})
+	return q
+}
+
+// WhereLike appends a LIKE predicate for static analysis.
+func (q *Query[T]) WhereLike(field string, pattern string) *Query[T] {
+	if field == "" || pattern == "" {
+		return q
+	}
+
+	q.where = append(q.where, func(ast *dialect.QueryAST) {
+		ast.Where = append(ast.Where, fmt.Sprintf("%s LIKE ?", field))
+	})
 	return q
 }
 
