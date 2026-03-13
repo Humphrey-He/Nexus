@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"time"
 
 	"gore/dialect"
 	"gore/internal/executor"
@@ -22,6 +23,7 @@ type Context struct {
 	dialector  dialect.Dialector
 	trackingOn bool
 	tracker    *tracker.Tracker
+	metrics    Metrics
 }
 
 // NewContext creates a DbContext with required dependencies.
@@ -45,6 +47,13 @@ func Set[T any](c *Context) *DbSet[T] {
 	return &DbSet[T]{ctx: c}
 }
 
+// WithMetrics attaches a metrics recorder.
+func (c *Context) WithMetrics(m Metrics) *Context {
+	clone := *c
+	clone.metrics = m
+	return &clone
+}
+
 // SaveChanges commits the tracked changes.
 func (c *Context) SaveChanges(ctx context.Context) (int, error) {
 	_ = ctx
@@ -52,7 +61,11 @@ func (c *Context) SaveChanges(ctx context.Context) (int, error) {
 		return 0, ErrTrackingDisabled
 	}
 
+	start := time.Now()
 	changes, err := c.tracker.DetectChanges()
+	if c.metrics != nil {
+		c.metrics.ObserveChangeTracking(time.Since(start), len(changes))
+	}
 	if err != nil {
 		return 0, err
 	}
