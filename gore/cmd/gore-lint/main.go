@@ -5,8 +5,14 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	"gore/internal/advisor"
@@ -107,8 +113,10 @@ func runCheck(args []string) error {
 		return errors.New("live schema loading via --dsn is not implemented yet")
 	}
 
-	// TODO: Extract QueryMetadata from target source path.
-	queries := []*advisor.QueryMetadata{}
+	queries, err := extractQueries(cfg.target)
+	if err != nil {
+		return err
+	}
 
 	engine := advisor.NewEngine(
 		rules.NewLeftmostMatchRule(),
@@ -150,6 +158,269 @@ func buildStats(suggestions []advisor.Suggestion) reportStats {
 		}
 	}
 	return stats
+}
+
+func extractQueries(target string) ([]*advisor.QueryMetadata, error) {
+	paths, err := collectGoFiles(target)
+	if err != nil {
+		return nil, err
+	}
+
+	fset := token.NewFileSet()
+	seen := map[string]struct{}{}
+	var out []*advisor.QueryMetadata
+
+	for _, path := range paths {
+		file, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
+		if err != nil {
+			return nil, err
+		}
+
+		ast.Inspect(file, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+
+			meta, key := buildQueryMetadata(call, fset, path)
+			if meta == nil || key == "" {
+				return true
+			}
+			if _, exists := seen[key]; exists {
+				return true
+			}
+
+			seen[key] = struct{}{}
+			out = append(out, meta)
+			return true
+		})
+	}
+
+	return out, nil
+}
+
+func buildQueryMetadata(call *ast.CallExpr, fset *token.FileSet, path string) (*advisor.QueryMetadata, string) {
+	chain := collectCallChain(call)
+	if len(chain) == 0 {
+		return nil, ""
+	}
+
+	var queryPos token.Pos
+	meta := &advisor.QueryMetadata{}
+	for i := len(chain) - 1; i >= 0; i-- {
+		item := chain[i]
+		switch item.name {
+		case "Query":
+			queryPos = item.pos
+		case "From":
+			if v, ok := parseStringLiteral(item.args, 0); ok {
+				meta.TableName = v
+			}
+		case "WhereField":
+			cond, ok := parseWhereField(item.args)
+			if ok {
+				meta.Conditions = append(meta.Conditions, cond)
+			}
+		case "OrderBy":
+			if v, ok := parseStringLiteral(item.args, 0); ok {
+				field, dir := parseOrderBy(v)
+				if field != "" {
+					meta.OrderBy = append(meta.OrderBy, advisor.OrderField{Field: field, Direction: dir})
+				}
+			}
+		case "Limit":
+			if v, ok := parseIntLiteral(item.args, 0); ok {
+				meta.Limit = &v
+			}
+		case "Offset":
+			if v, ok := parseIntLiteral(item.args, 0); ok {
+				meta.Offset = &v
+			}
+		}
+	}
+
+	if meta.TableName == "" || queryPos == token.NoPos {
+		return nil, ""
+	}
+
+	pos := fset.Position(queryPos)
+	meta.SourceFile = path
+	meta.LineNumber = pos.Line
+
+	key := fmt.Sprintf("%s:%d:%d", path, pos.Line, pos.Column)
+	return meta, key
+}
+
+type callItem struct {
+	name string
+	args []ast.Expr
+	pos  token.Pos
+}
+
+func collectCallChain(call *ast.CallExpr) []callItem {
+	var chain []callItem
+	cur := call
+	for {
+		sel, ok := cur.Fun.(*ast.SelectorExpr)
+		if !ok {
+			break
+		}
+		chain = append(chain, callItem{name: sel.Sel.Name, args: cur.Args, pos: cur.Lparen})
+		inner, ok := sel.X.(*ast.CallExpr)
+		if !ok {
+			break
+		}
+		cur = inner
+	}
+	return chain
+}
+
+func parseWhereField(args []ast.Expr) (advisor.Condition, bool) {
+	if len(args) < 3 {
+		return advisor.Condition{}, false
+	}
+	field, ok := parseStringLiteral(args, 0)
+	if !ok {
+		return advisor.Condition{}, false
+	}
+	op, ok := parseStringLiteral(args, 1)
+	if !ok {
+		return advisor.Condition{}, false
+	}
+	value, valueType, ok := parseLiteral(args[2])
+	if !ok {
+		return advisor.Condition{}, false
+	}
+
+	return advisor.Condition{
+		Field:     field,
+		Operator:  op,
+		Value:     value,
+		ValueType: valueType,
+	}, true
+}
+
+func parseStringLiteral(args []ast.Expr, idx int) (string, bool) {
+	if idx >= len(args) {
+		return "", false
+	}
+	lit, ok := args[idx].(*ast.BasicLit)
+	if !ok || lit.Kind != token.STRING {
+		return "", false
+	}
+	v, err := strconv.Unquote(lit.Value)
+	if err != nil {
+		return "", false
+	}
+	return v, true
+}
+
+func parseIntLiteral(args []ast.Expr, idx int) (int, bool) {
+	if idx >= len(args) {
+		return 0, false
+	}
+	lit, ok := args[idx].(*ast.BasicLit)
+	if !ok || (lit.Kind != token.INT && lit.Kind != token.FLOAT) {
+		return 0, false
+	}
+	value, err := strconv.ParseFloat(lit.Value, 64)
+	if err != nil {
+		return 0, false
+	}
+	return int(value), true
+}
+
+func parseLiteral(expr ast.Expr) (any, string, bool) {
+	switch v := expr.(type) {
+	case *ast.BasicLit:
+		switch v.Kind {
+		case token.STRING:
+			parsed, err := strconv.Unquote(v.Value)
+			if err != nil {
+				return nil, "", false
+			}
+			return parsed, "string", true
+		case token.INT:
+			parsed, err := strconv.ParseInt(v.Value, 10, 64)
+			if err != nil {
+				return nil, "", false
+			}
+			return parsed, "int", true
+		case token.FLOAT:
+			parsed, err := strconv.ParseFloat(v.Value, 64)
+			if err != nil {
+				return nil, "", false
+			}
+			return parsed, "float", true
+		}
+	case *ast.Ident:
+		switch v.Name {
+		case "true":
+			return true, "bool", true
+		case "false":
+			return false, "bool", true
+		}
+	}
+	return nil, "", false
+}
+
+func parseOrderBy(expr string) (string, string) {
+	parts := strings.Fields(expr)
+	if len(parts) == 0 {
+		return "", ""
+	}
+	if len(parts) == 1 {
+		return parts[0], "ASC"
+	}
+	return parts[0], strings.ToUpper(parts[1])
+}
+
+func collectGoFiles(target string) ([]string, error) {
+	if strings.HasSuffix(target, "/...") || strings.HasSuffix(target, "\\...") {
+		root := strings.TrimSuffix(target, "/...")
+		root = strings.TrimSuffix(root, "\\...")
+		return walkGoFiles(root)
+	}
+
+	info, err := os.Stat(target)
+	if err != nil {
+		return nil, err
+	}
+
+	if info.IsDir() {
+		return walkGoFiles(target)
+	}
+
+	if strings.HasSuffix(target, ".go") {
+		return []string{target}, nil
+	}
+
+	return nil, fmt.Errorf("unsupported target: %s", target)
+}
+
+func walkGoFiles(root string) ([]string, error) {
+	var out []string
+	walkFn := func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		name := d.Name()
+		if d.IsDir() {
+			if strings.HasPrefix(name, ".") || name == "vendor" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if strings.HasSuffix(name, ".go") {
+			out = append(out, path)
+		}
+		return nil
+	}
+
+	if err := filepath.WalkDir(root, walkFn); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func loadSchemaCache(path string) (schemaCache, error) {
