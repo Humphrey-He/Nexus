@@ -181,7 +181,7 @@ func extractQueries(target string) ([]*advisor.QueryMetadata, error) {
 			return nil, err
 		}
 
-		consts := collectConstLiterals(file)
+		consts := collectFileLiterals(file)
 		ast.Inspect(file, func(n ast.Node) bool {
 			call, ok := n.(*ast.CallExpr)
 			if !ok {
@@ -205,11 +205,11 @@ func extractQueries(target string) ([]*advisor.QueryMetadata, error) {
 	return out, nil
 }
 
-func collectConstLiterals(file *ast.File) map[string]literalValue {
+func collectFileLiterals(file *ast.File) map[string]literalValue {
 	values := map[string]literalValue{}
 	for _, decl := range file.Decls {
 		gen, ok := decl.(*ast.GenDecl)
-		if !ok || gen.Tok != token.CONST {
+		if !ok || (gen.Tok != token.CONST && gen.Tok != token.VAR) {
 			continue
 		}
 		for _, spec := range gen.Specs {
@@ -418,6 +418,64 @@ func evalLiteral(expr ast.Expr, consts map[string]literalValue) (literalValue, b
 				}
 			}
 		}
+	case *ast.ParenExpr:
+		return evalLiteral(v.X, consts)
+	case *ast.BinaryExpr:
+		return evalBinaryLiteral(v, consts)
+	case *ast.CallExpr:
+		if lit, ok := evalWrapperCall(v, consts); ok {
+			return lit, true
+		}
+	}
+	return literalValue{}, false
+}
+
+func evalBinaryLiteral(expr *ast.BinaryExpr, consts map[string]literalValue) (literalValue, bool) {
+	if expr.Op != token.ADD {
+		return literalValue{}, false
+	}
+	left, ok := evalLiteral(expr.X, consts)
+	if !ok {
+		return literalValue{}, false
+	}
+	right, ok := evalLiteral(expr.Y, consts)
+	if !ok {
+		return literalValue{}, false
+	}
+
+	if left.kind == "string" && right.kind == "string" {
+		return literalValue{value: left.value.(string) + right.value.(string), kind: "string"}, true
+	}
+	if left.kind == "int" && right.kind == "int" {
+		return literalValue{value: left.value.(int64) + right.value.(int64), kind: "int"}, true
+	}
+	if left.kind == "float" && right.kind == "float" {
+		return literalValue{value: left.value.(float64) + right.value.(float64), kind: "float"}, true
+	}
+	return literalValue{}, false
+}
+
+func evalWrapperCall(call *ast.CallExpr, consts map[string]literalValue) (literalValue, bool) {
+	ident, ok := call.Fun.(*ast.Ident)
+	if !ok {
+		return literalValue{}, false
+	}
+	switch ident.Name {
+	case "int", "int64", "float64", "string", "bool":
+		if len(call.Args) != 1 {
+			return literalValue{}, false
+		}
+		arg, ok := evalLiteral(call.Args[0], consts)
+		if !ok {
+			return literalValue{}, false
+		}
+		return literalValue{value: arg.value, kind: ident.Name}, true
+	case "ptr":
+		// unwrap simple ptr(x) wrappers
+		if len(call.Args) != 1 {
+			return literalValue{}, false
+		}
+		return evalLiteral(call.Args[0], consts)
 	}
 	return literalValue{}, false
 }
