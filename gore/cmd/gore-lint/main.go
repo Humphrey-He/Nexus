@@ -1,9 +1,13 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
+	"time"
+
+	"gore/internal/advisor"
 )
 
 type config struct {
@@ -11,6 +15,22 @@ type config struct {
 	schema    string
 	target    string
 	useStdout bool
+}
+
+type report struct {
+	Version     string               `json:"version"`
+	GeneratedAt string               `json:"generatedAt"`
+	Target      string               `json:"target"`
+	Suggestions []advisor.Suggestion `json:"suggestions"`
+	Stats       reportStats          `json:"stats"`
+}
+
+type reportStats struct {
+	Total    int `json:"total"`
+	Info     int `json:"info"`
+	Warn     int `json:"warn"`
+	High     int `json:"high"`
+	Critical int `json:"critical"`
 }
 
 func main() {
@@ -44,7 +64,7 @@ func runCheck(args []string) error {
 	cfg := &config{}
 	fs.StringVar(&cfg.dsn, "dsn", "", "database DSN for live schema")
 	fs.StringVar(&cfg.schema, "schema", "", "path to schema cache JSON")
-	fs.BoolVar(&cfg.useStdout, "stdout", false, "write diagnostics to stdout")
+	fs.BoolVar(&cfg.useStdout, "stdout", true, "write diagnostics to stdout")
 
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -64,9 +84,36 @@ func runCheck(args []string) error {
 		return fmt.Errorf("--dsn and --schema are mutually exclusive")
 	}
 
-	// TODO: wire semantic extractor, metadata provider, and rule engine.
-	_ = cfg
-	return nil
+	// TODO: Load schema from live database or schema cache based on flags.
+	// TODO: Extract QueryMetadata from target source path.
+
+	engine := advisor.NewEngine()
+	_ = engine
+
+	rep := report{
+		Version:     "0.1",
+		GeneratedAt: time.Now().UTC().Format(time.RFC3339),
+		Target:      cfg.target,
+		Suggestions: []advisor.Suggestion{},
+		Stats:       reportStats{},
+	}
+
+	return writeReport(rep, cfg.useStdout)
+}
+
+func writeReport(rep report, useStdout bool) error {
+	data, err := json.MarshalIndent(rep, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	out := os.Stdout
+	if !useStdout {
+		out = os.Stderr
+	}
+
+	_, err = out.Write(append(data, '\n'))
+	return err
 }
 
 func printUsage() {

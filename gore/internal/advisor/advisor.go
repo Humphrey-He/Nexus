@@ -12,16 +12,16 @@ const (
 
 // Suggestion explains an index-related risk and guidance.
 type Suggestion struct {
-	RuleID         string
-	Severity       Severity
-	Message        string
-	Reason         string
-	Evidence       []string
-	Recommendation string
-	Confidence     float64
-	SourceFile     string
-	LineNumber     int
-	Tags           []string
+	RuleID         string   `json:"ruleId"`
+	Severity       Severity `json:"severity"`
+	Message        string   `json:"message"`
+	Reason         string   `json:"reason"`
+	Evidence       []string `json:"evidence,omitempty"`
+	Recommendation string   `json:"recommendation,omitempty"`
+	Confidence     float64  `json:"confidence"`
+	SourceFile     string   `json:"sourceFile,omitempty"`
+	LineNumber     int      `json:"lineNumber,omitempty"`
+	Tags           []string `json:"tags,omitempty"`
 }
 
 // Advisor analyzes query metadata with schema metadata and returns suggestions.
@@ -32,54 +32,54 @@ type Advisor interface {
 
 // QueryMetadata captures semantic info extracted from queries.
 type QueryMetadata struct {
-	TableName  string
-	Columns    []string
-	Conditions []Condition
-	OrderBy    []OrderField
-	GroupBy    []string
-	Joins      []JoinClause
-	Limit      *int
-	Offset     *int
-	IsDistinct bool
-	SourceFile string
-	LineNumber int
+	TableName  string       `json:"tableName"`
+	Columns    []string     `json:"columns,omitempty"`
+	Conditions []Condition  `json:"conditions,omitempty"`
+	OrderBy    []OrderField `json:"orderBy,omitempty"`
+	GroupBy    []string     `json:"groupBy,omitempty"`
+	Joins      []JoinClause `json:"joins,omitempty"`
+	Limit      *int         `json:"limit,omitempty"`
+	Offset     *int         `json:"offset,omitempty"`
+	IsDistinct bool         `json:"isDistinct,omitempty"`
+	SourceFile string       `json:"sourceFile,omitempty"`
+	LineNumber int          `json:"lineNumber,omitempty"`
 }
 
 // Condition represents a WHERE clause predicate.
 type Condition struct {
-	Field      string
-	Operator   string
-	Value      any
-	ValueType  string
-	IsFunction bool
-	FuncName   string
-	IsNegated  bool
+	Field      string `json:"field"`
+	Operator   string `json:"operator"`
+	Value      any    `json:"value,omitempty"`
+	ValueType  string `json:"valueType,omitempty"`
+	IsFunction bool   `json:"isFunction,omitempty"`
+	FuncName   string `json:"funcName,omitempty"`
+	IsNegated  bool   `json:"isNegated,omitempty"`
 }
 
 // OrderField represents ORDER BY fields.
 type OrderField struct {
-	Field     string
-	Direction string
+	Field     string `json:"field"`
+	Direction string `json:"direction"`
 }
 
 // JoinClause represents JOIN information.
 type JoinClause struct {
-	Type         string
-	Table        string
-	OnConditions []Condition
+	Type         string      `json:"type"`
+	Table        string      `json:"table"`
+	OnConditions []Condition `json:"onConditions,omitempty"`
 }
 
 // TableSchema contains table metadata for analysis.
 type TableSchema struct {
-	TableName string
-	Indexes   []IndexInfo
+	TableName string      `json:"tableName"`
+	Indexes   []IndexInfo `json:"indexes,omitempty"`
 }
 
 // IndexInfo describes an index for advisor analysis.
 type IndexInfo struct {
-	Name    string
-	Columns []string
-	Unique  bool
-	Method  string
-	IsBTree bool
+	Name    string   `json:"name"`
+	Columns []string `json:"columns,omitempty"`
+	Unique  bool     `json:"unique"`
+	Method  string   `json:"method"`
+	IsBTree bool     `json:"isBtree"`
 }
