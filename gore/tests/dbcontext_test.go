@@ -71,3 +71,27 @@ func TestDbContextSet(t *testing.T) {
 		t.Fatalf("expected DbSet, got nil")
 	}
 }
+
+func TestDbContextSaveChangesNoTracking(t *testing.T) {
+	ctx := newContext().AsNoTracking()
+	if _, err := ctx.SaveChanges(context.Background()); err != api.ErrTrackingDisabled {
+		t.Fatalf("expected ErrTrackingDisabled, got %v", err)
+	}
+}
+
+func TestDbContextSaveChangesNoChanges(t *testing.T) {
+	ctx := newContext()
+	set := api.Set[User](ctx)
+	user := &User{ID: 1, Name: "Alice"}
+	if err := set.Attach(user); err != nil {
+		t.Fatalf("attach failed: %v", err)
+	}
+
+	changes, err := ctx.SaveChanges(context.Background())
+	if err != nil {
+		t.Fatalf("save changes failed: %v", err)
+	}
+	if changes != 0 {
+		t.Fatalf("expected 0 changes, got %d", changes)
+	}
+}
