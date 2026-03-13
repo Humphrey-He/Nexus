@@ -71,8 +71,15 @@ type JoinClause struct {
 
 // TableSchema contains table metadata for analysis.
 type TableSchema struct {
-	TableName string      `json:"tableName"`
-	Indexes   []IndexInfo `json:"indexes,omitempty"`
+	TableName string       `json:"tableName"`
+	Columns   []ColumnInfo `json:"columns,omitempty"`
+	Indexes   []IndexInfo  `json:"indexes,omitempty"`
+}
+
+// ColumnInfo describes a table column for type checks.
+type ColumnInfo struct {
+	Name string `json:"name"`
+	Type string `json:"type"`
 }
 
 // IndexInfo describes an index for advisor analysis.
