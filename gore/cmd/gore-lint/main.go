@@ -46,6 +46,11 @@ type schemaCache struct {
 	Tables []advisor.TableSchema `json:"tables"`
 }
 
+type literalValue struct {
+	value any
+	kind  string
+}
+
 func main() {
 	if err := run(os.Args[1:]); err != nil {
 		fmt.Fprintf(os.Stderr, "gore-lint: %s\n", err.Error())
@@ -176,13 +181,14 @@ func extractQueries(target string) ([]*advisor.QueryMetadata, error) {
 			return nil, err
 		}
 
+		consts := collectConstLiterals(file)
 		ast.Inspect(file, func(n ast.Node) bool {
 			call, ok := n.(*ast.CallExpr)
 			if !ok {
 				return true
 			}
 
-			meta, key := buildQueryMetadata(call, fset, path)
+			meta, key := buildQueryMetadata(call, fset, path, consts)
 			if meta == nil || key == "" {
 				return true
 			}
@@ -199,7 +205,34 @@ func extractQueries(target string) ([]*advisor.QueryMetadata, error) {
 	return out, nil
 }
 
-func buildQueryMetadata(call *ast.CallExpr, fset *token.FileSet, path string) (*advisor.QueryMetadata, string) {
+func collectConstLiterals(file *ast.File) map[string]literalValue {
+	values := map[string]literalValue{}
+	for _, decl := range file.Decls {
+		gen, ok := decl.(*ast.GenDecl)
+		if !ok || gen.Tok != token.CONST {
+			continue
+		}
+		for _, spec := range gen.Specs {
+			valueSpec, ok := spec.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			for i, name := range valueSpec.Names {
+				if i >= len(valueSpec.Values) {
+					continue
+				}
+				lit, ok := evalLiteral(valueSpec.Values[i], values)
+				if !ok {
+					continue
+				}
+				values[name.Name] = lit
+			}
+		}
+	}
+	return values
+}
+
+func buildQueryMetadata(call *ast.CallExpr, fset *token.FileSet, path string, consts map[string]literalValue) (*advisor.QueryMetadata, string) {
 	chain := collectCallChain(call)
 	if len(chain) == 0 {
 		return nil, ""
@@ -213,27 +246,27 @@ func buildQueryMetadata(call *ast.CallExpr, fset *token.FileSet, path string) (*
 		case "Query":
 			queryPos = item.pos
 		case "From":
-			if v, ok := parseStringLiteral(item.args, 0); ok {
+			if v, ok := evalString(item.args, 0, consts); ok {
 				meta.TableName = v
 			}
 		case "WhereField":
-			cond, ok := parseWhereField(item.args)
+			cond, ok := parseWhereField(item.args, consts)
 			if ok {
 				meta.Conditions = append(meta.Conditions, cond)
 			}
 		case "OrderBy":
-			if v, ok := parseStringLiteral(item.args, 0); ok {
+			if v, ok := evalString(item.args, 0, consts); ok {
 				field, dir := parseOrderBy(v)
 				if field != "" {
 					meta.OrderBy = append(meta.OrderBy, advisor.OrderField{Field: field, Direction: dir})
 				}
 			}
 		case "Limit":
-			if v, ok := parseIntLiteral(item.args, 0); ok {
+			if v, ok := evalInt(item.args, 0, consts); ok {
 				meta.Limit = &v
 			}
 		case "Offset":
-			if v, ok := parseIntLiteral(item.args, 0); ok {
+			if v, ok := evalInt(item.args, 0, consts); ok {
 				meta.Offset = &v
 			}
 		}
@@ -275,19 +308,19 @@ func collectCallChain(call *ast.CallExpr) []callItem {
 	return chain
 }
 
-func parseWhereField(args []ast.Expr) (advisor.Condition, bool) {
+func parseWhereField(args []ast.Expr, consts map[string]literalValue) (advisor.Condition, bool) {
 	if len(args) < 3 {
 		return advisor.Condition{}, false
 	}
-	field, ok := parseStringLiteral(args, 0)
+	field, ok := evalString(args, 0, consts)
 	if !ok {
 		return advisor.Condition{}, false
 	}
-	op, ok := parseStringLiteral(args, 1)
+	op, ok := evalString(args, 1, consts)
 	if !ok {
 		return advisor.Condition{}, false
 	}
-	value, valueType, ok := parseLiteral(args[2])
+	value, valueType, ok := evalAny(args[2], consts)
 	if !ok {
 		return advisor.Condition{}, false
 	}
@@ -300,68 +333,93 @@ func parseWhereField(args []ast.Expr) (advisor.Condition, bool) {
 	}, true
 }
 
-func parseStringLiteral(args []ast.Expr, idx int) (string, bool) {
+func evalString(args []ast.Expr, idx int, consts map[string]literalValue) (string, bool) {
 	if idx >= len(args) {
 		return "", false
 	}
-	lit, ok := args[idx].(*ast.BasicLit)
-	if !ok || lit.Kind != token.STRING {
+	lit, ok := evalLiteral(args[idx], consts)
+	if !ok || lit.kind != "string" {
 		return "", false
 	}
-	v, err := strconv.Unquote(lit.Value)
-	if err != nil {
-		return "", false
-	}
-	return v, true
+	v, ok := lit.value.(string)
+	return v, ok
 }
 
-func parseIntLiteral(args []ast.Expr, idx int) (int, bool) {
+func evalInt(args []ast.Expr, idx int, consts map[string]literalValue) (int, bool) {
 	if idx >= len(args) {
 		return 0, false
 	}
-	lit, ok := args[idx].(*ast.BasicLit)
-	if !ok || (lit.Kind != token.INT && lit.Kind != token.FLOAT) {
+	lit, ok := evalLiteral(args[idx], consts)
+	if !ok {
 		return 0, false
 	}
-	value, err := strconv.ParseFloat(lit.Value, 64)
-	if err != nil {
+
+	switch v := lit.value.(type) {
+	case int:
+		return v, true
+	case int64:
+		return int(v), true
+	case float64:
+		return int(v), true
+	default:
 		return 0, false
 	}
-	return int(value), true
 }
 
-func parseLiteral(expr ast.Expr) (any, string, bool) {
+func evalAny(expr ast.Expr, consts map[string]literalValue) (any, string, bool) {
+	lit, ok := evalLiteral(expr, consts)
+	if ok {
+		return lit.value, lit.kind, true
+	}
+	return nil, "", false
+}
+
+func evalLiteral(expr ast.Expr, consts map[string]literalValue) (literalValue, bool) {
 	switch v := expr.(type) {
 	case *ast.BasicLit:
 		switch v.Kind {
 		case token.STRING:
 			parsed, err := strconv.Unquote(v.Value)
 			if err != nil {
-				return nil, "", false
+				return literalValue{}, false
 			}
-			return parsed, "string", true
+			return literalValue{value: parsed, kind: "string"}, true
 		case token.INT:
 			parsed, err := strconv.ParseInt(v.Value, 10, 64)
 			if err != nil {
-				return nil, "", false
+				return literalValue{}, false
 			}
-			return parsed, "int", true
+			return literalValue{value: parsed, kind: "int"}, true
 		case token.FLOAT:
 			parsed, err := strconv.ParseFloat(v.Value, 64)
 			if err != nil {
-				return nil, "", false
+				return literalValue{}, false
 			}
-			return parsed, "float", true
+			return literalValue{value: parsed, kind: "float"}, true
 		}
 	case *ast.Ident:
 		switch v.Name {
 		case "true":
-			return true, "bool", true
+			return literalValue{value: true, kind: "bool"}, true
 		case "false":
-			return false, "bool", true
+			return literalValue{value: false, kind: "bool"}, true
+		}
+		if lit, ok := consts[v.Name]; ok {
+			return lit, true
+		}
+	case *ast.UnaryExpr:
+		if v.Op == token.SUB {
+			if lit, ok := evalLiteral(v.X, consts); ok {
+				switch val := lit.value.(type) {
+				case int64:
+					return literalValue{value: -val, kind: lit.kind}, true
+				case float64:
+					return literalValue{value: -val, kind: lit.kind}, true
+				}
+			}
 		}
 	}
-	return nil, "", false
+	return literalValue{}, false
 }
 
 func parseOrderBy(expr string) (string, string) {
