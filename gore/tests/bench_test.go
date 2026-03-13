@@ -1,27 +1,27 @@
-﻿package tests
+package tests
 
 import (
-    "testing"
+	"testing"
 
-    "gore/api"
-    "gore/dialect"
+	"gore/api"
+	"gore/dialect"
 )
 
 func BenchmarkQueryBuild(b *testing.B) {
-    ctx := newContext()
-    set := api.Set[User](ctx)
+	ctx := newContext()
+	set := api.Set[User](ctx)
 
-    b.ReportAllocs()
-    b.ResetTimer()
+	b.ReportAllocs()
+	b.ResetTimer()
 
-    for i := 0; i < b.N; i++ {
-        _ = set.Query().
-            Where(func(ast *dialect.QueryAST) {
-                _ = ast
-            }).
-            OrderBy("id DESC").
-            Limit(10).
-            Offset(5).
-            ToAST()
-    }
+	for i := 0; i < b.N; i++ {
+		_ = set.Query().
+			Where(func(ast *dialect.QueryAST) {
+				_ = ast
+			}).
+			OrderBy("id DESC").
+			Limit(10).
+			Offset(5).
+			ToAST()
+	}
 }
