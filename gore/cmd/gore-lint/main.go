@@ -2,12 +2,15 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"gore/internal/advisor"
+	"gore/internal/advisor/rules"
 )
 
 type config struct {
@@ -31,6 +34,10 @@ type reportStats struct {
 	Warn     int `json:"warn"`
 	High     int `json:"high"`
 	Critical int `json:"critical"`
+}
+
+type schemaCache struct {
+	Tables []advisor.TableSchema `json:"tables"`
 }
 
 func main() {
@@ -84,21 +91,83 @@ func runCheck(args []string) error {
 		return fmt.Errorf("--dsn and --schema are mutually exclusive")
 	}
 
-	// TODO: Load schema from live database or schema cache based on flags.
-	// TODO: Extract QueryMetadata from target source path.
+	schemasByTable := map[string]advisor.TableSchema{}
+	if cfg.schema != "" {
+		loaded, err := loadSchemaCache(cfg.schema)
+		if err != nil {
+			return err
+		}
+		for _, table := range loaded.Tables {
+			schemasByTable[table.TableName] = table
+		}
+	}
 
-	engine := advisor.NewEngine()
-	_ = engine
+	if cfg.dsn != "" {
+		// TODO: implement live schema fetch via metadata provider.
+		return errors.New("live schema loading via --dsn is not implemented yet")
+	}
+
+	// TODO: Extract QueryMetadata from target source path.
+	queries := []*advisor.QueryMetadata{}
+
+	engine := advisor.NewEngine(
+		rules.NewLeftmostMatchRule(),
+	)
+
+	var suggestions []advisor.Suggestion
+	for _, query := range queries {
+		schema, ok := schemasByTable[query.TableName]
+		if !ok {
+			continue
+		}
+		suggestions = append(suggestions, engine.Analyze(query, &schema)...)
+	}
 
 	rep := report{
 		Version:     "0.1",
 		GeneratedAt: time.Now().UTC().Format(time.RFC3339),
 		Target:      cfg.target,
-		Suggestions: []advisor.Suggestion{},
-		Stats:       reportStats{},
+		Suggestions: suggestions,
+		Stats:       buildStats(suggestions),
 	}
 
 	return writeReport(rep, cfg.useStdout)
+}
+
+func buildStats(suggestions []advisor.Suggestion) reportStats {
+	stats := reportStats{}
+	stats.Total = len(suggestions)
+	for _, s := range suggestions {
+		switch s.Severity {
+		case advisor.SeverityInfo:
+			stats.Info++
+		case advisor.SeverityWarn:
+			stats.Warn++
+		case advisor.SeverityHigh:
+			stats.High++
+		case advisor.SeverityCritical:
+			stats.Critical++
+		}
+	}
+	return stats
+}
+
+func loadSchemaCache(path string) (schemaCache, error) {
+	if path == "" {
+		return schemaCache{}, fmt.Errorf("schema path is empty")
+	}
+
+	data, err := os.ReadFile(filepath.Clean(path))
+	if err != nil {
+		return schemaCache{}, err
+	}
+
+	var cache schemaCache
+	if err := json.Unmarshal(data, &cache); err != nil {
+		return schemaCache{}, err
+	}
+
+	return cache, nil
 }
 
 func writeReport(rep report, useStdout bool) error {
