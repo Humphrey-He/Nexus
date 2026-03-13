@@ -29,6 +29,20 @@ func TestDbSetQueryFromWhereField(t *testing.T) {
 	}
 }
 
+func TestDbSetQueryWhereInLike(t *testing.T) {
+	ctx := newContext()
+	set := api.Set[User](ctx)
+	ast := set.Query().
+		From("users").
+		WhereIn("id", 1, 2, 3).
+		WhereLike("name", "%ali%").
+		ToAST()
+
+	if len(ast.Where) != 2 {
+		t.Fatalf("expected 2 where clauses, got %d", len(ast.Where))
+	}
+}
+
 func TestDbSetAttachAddRemove(t *testing.T) {
 	ctx := newContext()
 	set := api.Set[User](ctx)
