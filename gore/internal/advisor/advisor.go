@@ -84,9 +84,10 @@ type ColumnInfo struct {
 
 // IndexInfo describes an index for advisor analysis.
 type IndexInfo struct {
-	Name    string   `json:"name"`
-	Columns []string `json:"columns,omitempty"`
-	Unique  bool     `json:"unique"`
-	Method  string   `json:"method"`
-	IsBTree bool     `json:"isBtree"`
+	Name     string         `json:"name"`
+	Columns  []string      `json:"columns,omitempty"`
+	Unique   bool          `json:"unique"`
+	Method   string        `json:"method"`
+	IsBTree  bool          `json:"isBtree"`
+	Metadata map[string]any `json:"metadata,omitempty"`
 }

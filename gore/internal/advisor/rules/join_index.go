@@ -2,6 +2,7 @@ package rules
 
 import (
 	"fmt"
+	"strings"
 
 	"gore/internal/advisor"
 )
@@ -31,7 +32,7 @@ func (r *JoinIndexRule) Check(query *advisor.QueryMetadata, schema *advisor.Tabl
 	var out []advisor.Suggestion
 	for _, join := range query.Joins {
 		for _, cond := range join.OnConditions {
-			if !hasIndexOn(schema.Indexes, cond.Field) {
+			if !hasJoinIndexOn(schema.Indexes, cond.Field) {
 				out = append(out, advisor.Suggestion{
 					RuleID:         r.ID(),
 					Severity:       r.Severity(),
@@ -48,4 +49,15 @@ func (r *JoinIndexRule) Check(query *advisor.QueryMetadata, schema *advisor.Tabl
 	}
 
 	return out
+}
+
+// hasJoinIndexOn checks if a field has an index suitable for JOIN operations.
+// For JOIN, the field should ideally be the first column of an index.
+func hasJoinIndexOn(indexes []advisor.IndexInfo, field string) bool {
+	for _, idx := range indexes {
+		if len(idx.Columns) > 0 && strings.EqualFold(idx.Columns[0], field) {
+			return true
+		}
+	}
+	return false
 }
