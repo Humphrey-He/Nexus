@@ -1,0 +1,144 @@
+{
+  "tables": [
+    {
+      "tableName": "users",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer"
+        },
+        {
+          "name": "name",
+          "type": "character varying"
+        },
+        {
+          "name": "email",
+          "type": "character varying"
+        },
+        {
+          "name": "age",
+          "type": "integer"
+        },
+        {
+          "name": "status",
+          "type": "character varying"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp without time zone"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "users_age_idx",
+          "columns": [
+            "age"
+          ],
+          "unique": false,
+          "method": "btree",
+          "isBtree": true
+        },
+        {
+          "name": "users_created_at_idx",
+          "columns": [
+            "created_at"
+          ],
+          "unique": false,
+          "method": "btree",
+          "isBtree": true
+        },
+        {
+          "name": "users_email_key",
+          "columns": [
+            "email"
+          ],
+          "unique": true,
+          "method": "btree",
+          "isBtree": true
+        },
+        {
+          "name": "users_name_age_idx",
+          "columns": [
+            "name",
+            "age"
+          ],
+          "unique": false,
+          "method": "btree",
+          "isBtree": true
+        },
+        {
+          "name": "users_name_idx",
+          "columns": [
+            "name"
+          ],
+          "unique": false,
+          "method": "btree",
+          "isBtree": true
+        },
+        {
+          "name": "users_pkey",
+          "columns": [
+            "id"
+          ],
+          "unique": true,
+          "method": "btree",
+          "isBtree": true
+        }
+      ]
+    },
+    {
+      "tableName": "orders",
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer"
+        },
+        {
+          "name": "user_id",
+          "type": "integer"
+        },
+        {
+          "name": "amount",
+          "type": "numeric"
+        },
+        {
+          "name": "status",
+          "type": "character varying"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp without time zone"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "orders_pkey",
+          "columns": [
+            "id"
+          ],
+          "unique": true,
+          "method": "btree",
+          "isBtree": true
+        },
+        {
+          "name": "orders_status_idx",
+          "columns": [
+            "status"
+          ],
+          "unique": false,
+          "method": "btree",
+          "isBtree": true
+        },
+        {
+          "name": "orders_user_id_idx",
+          "columns": [
+            "user_id"
+          ],
+          "unique": false,
+          "method": "btree",
+          "isBtree": true
+        }
+      ]
+    }
+  ]
+}
