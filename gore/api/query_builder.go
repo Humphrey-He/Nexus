@@ -12,12 +12,14 @@ type Predicate[T any] func(*dialect.QueryAST)
 
 // Query is a typed query builder.
 type Query[T any] struct {
-	ctx    *Context
-	where  []Predicate[T]
-	limit  int
-	offset int
-	order  []string
-	table  string
+	ctx      *Context
+	where    []Predicate[T]
+	limit    int
+	offset   int
+	order    []string
+	table    string
+	groupBy  []string
+	distinct bool
 }
 
 // Where appends a predicate.
@@ -93,6 +95,20 @@ func (q *Query[T]) Limit(n int) *Query[T] {
 // Offset sets the number of rows to skip.
 func (q *Query[T]) Offset(n int) *Query[T] {
 	q.offset = n
+	return q
+}
+
+// GroupBy sets the GROUP BY fields.
+func (q *Query[T]) GroupBy(fields ...string) *Query[T] {
+	if len(fields) > 0 {
+		q.groupBy = append(q.groupBy, fields...)
+	}
+	return q
+}
+
+// Distinct enables DISTINCT selection.
+func (q *Query[T]) Distinct() *Query[T] {
+	q.distinct = true
 	return q
 }
 
