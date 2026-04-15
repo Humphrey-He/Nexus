@@ -1,0 +1,112 @@
+{
+  "name": "gore-lint",
+  "displayName": "gore-lint",
+  "description": "Index Advisor for Go - Lint your Go code for database index issues",
+  "version": "0.1.0",
+  "publisher": "gore",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Linters",
+    "Programming Languages"
+  ],
+  "activationEvents": [
+    "onLanguage:go",
+    "workspaceContains:**/*.go"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "configuration": {
+      "title": "gore-lint",
+      "properties": {
+        "goreLint.enable": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable gore-lint for Go files"
+        },
+        "goreLint.dsn": {
+          "type": "string",
+          "default": "",
+          "description": "Database DSN for live schema (e.g., postgres://user:pass@localhost:5432/db?sslmode=disable)"
+        },
+        "goreLint.schemaFile": {
+          "type": "string",
+          "default": "",
+          "description": "Path to schema cache JSON file"
+        },
+        "goreLint.failOn": {
+          "type": "string",
+          "default": "critical",
+          "enum": ["info", "warn", "high", "critical"],
+          "description": "Minimum severity level to show as error"
+        },
+        "goreLint.path": {
+          "type": "string",
+          "default": "gore-lint",
+          "description": "Path to gore-lint executable"
+        },
+        "goreLint.arguments": {
+          "type": "string",
+          "default": "--format json",
+          "description": "Additional arguments to pass to gore-lint"
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "gore-lint.run",
+        "title": "gore-lint: Run Analysis",
+        "description": "Run gore-lint analysis on the current workspace"
+      },
+      {
+        "command": "gore-lint.enable",
+        "title": "gore-lint: Enable",
+        "description": "Enable gore-lint in the current workspace"
+      },
+      {
+        "command": "gore-lint.disable",
+        "title": "gore-lint: Disable",
+        "description": "Disable gore-lint in the current workspace"
+      }
+    ],
+    "problemMatchers": [
+      {
+        "owner": "gore-lint",
+        "fileLocation": "relative",
+        "pattern": {
+          "regexp": "^\\s*(.+):(\\d+):(\\d+)?\\s*\\[(\\w+)\\]\\s*(.+)$",
+          "file": 1,
+          "line": 2,
+          "column": 3,
+          "severity": 4,
+          "message": 5
+        },
+        "severity": {
+          "info": "Information",
+          "warn": "Warning",
+          "warning": "Warning",
+          "high": "Error",
+          "error": "Error",
+          "critical": "Error"
+        }
+      }
+    ],
+    "languages": [
+      {
+        "id": "go",
+        "patterns": [
+          "**/*.go"
+        ],
+        "fileTypes": [
+          "go"
+        ]
+      }
+    ]
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "dependencies": {}
+}
