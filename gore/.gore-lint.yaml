@@ -1,0 +1,20 @@
+# gore-lint configuration
+rules:
+  IDX-001: warn
+  IDX-002: warn
+  IDX-003: warn
+  IDX-004: warn
+  IDX-005: warn
+  IDX-006: error
+  IDX-007: info
+  IDX-008: info
+  IDX-009: warn
+  IDX-010: info
+
+exclude:
+  - "**/*_test.go"
+  - "**/vendor/**"
+
+output:
+  format: text
+  color: true
