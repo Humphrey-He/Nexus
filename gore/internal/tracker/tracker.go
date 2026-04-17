@@ -1,8 +1,9 @@
 package tracker
 
 import (
-	"errors"
 	"reflect"
+
+	goreerrors "gore/internal/errors"
 )
 
 // EntityState represents a tracked entity state.
@@ -99,11 +100,11 @@ func (t *Tracker) DetectChanges() ([]*Entry, error) {
 
 		rv := reflect.ValueOf(entry.Entity)
 		if rv.Kind() != reflect.Pointer || rv.IsNil() {
-			return nil, errors.New("tracker: entity must be non-nil pointer")
+			return nil, goreerrors.ErrNilEntity
 		}
 		rv = rv.Elem()
 		if rv.Kind() != reflect.Struct {
-			return nil, errors.New("tracker: entity must point to struct")
+			return nil, goreerrors.ErrInvalidEntity
 		}
 
 		entry.Changes = diffSnapshot(entry.Snapshot, rv)
@@ -135,10 +136,10 @@ func (t *Tracker) Entries() []*Entry {
 func entityPtr(entity any) (uintptr, reflect.Value, error) {
 	rv := reflect.ValueOf(entity)
 	if rv.Kind() != reflect.Pointer || rv.IsNil() {
-		return 0, reflect.Value{}, errors.New("tracker: entity must be non-nil pointer")
+		return 0, reflect.Value{}, goreerrors.ErrNilEntity
 	}
 	if rv.Elem().Kind() != reflect.Struct {
-		return 0, reflect.Value{}, errors.New("tracker: entity must point to struct")
+		return 0, reflect.Value{}, goreerrors.ErrInvalidEntity
 	}
 	return rv.Pointer(), rv.Elem(), nil
 }
