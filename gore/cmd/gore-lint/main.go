@@ -1,8 +1,9 @@
 package main
 
 import (
+	"context"
+	"database/sql"
 	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
 	"go/ast"
@@ -15,6 +16,11 @@ import (
 	"strings"
 	"time"
 
+	_ "github.com/go-sql-driver/mysql"
+	_ "github.com/lib/pq"
+
+	"gore/dialect/mysql"
+	"gore/dialect/postgres"
 	"gore/internal/advisor"
 	"gore/internal/advisor/rules"
 )
@@ -22,6 +28,7 @@ import (
 type config struct {
 	dsn       string
 	schema    string
+	dbType    string
 	target    string
 	useStdout bool
 }
@@ -82,6 +89,7 @@ func runCheck(args []string) error {
 	cfg := &config{}
 	fs.StringVar(&cfg.dsn, "dsn", "", "database DSN for live schema")
 	fs.StringVar(&cfg.schema, "schema", "", "path to schema cache JSON")
+	fs.StringVar(&cfg.dbType, "db-type", "postgres", "database type: postgres or mysql")
 	fs.BoolVar(&cfg.useStdout, "stdout", true, "write diagnostics to stdout")
 
 	if err := fs.Parse(args); err != nil {
@@ -102,6 +110,11 @@ func runCheck(args []string) error {
 		return fmt.Errorf("--dsn and --schema are mutually exclusive")
 	}
 
+	// Validate db-type
+	if cfg.dbType != "postgres" && cfg.dbType != "mysql" {
+		return fmt.Errorf("invalid --db-type: must be 'postgres' or 'mysql', got %q", cfg.dbType)
+	}
+
 	schemasByTable := map[string]advisor.TableSchema{}
 	if cfg.schema != "" {
 		loaded, err := loadSchemaCache(cfg.schema)
@@ -114,8 +127,11 @@ func runCheck(args []string) error {
 	}
 
 	if cfg.dsn != "" {
-		// TODO: implement live schema fetch via metadata provider.
-		return errors.New("live schema loading via --dsn is not implemented yet")
+		liveSchemas, err := loadLiveSchema(cfg.dsn, cfg.dbType)
+		if err != nil {
+			return err
+		}
+		schemasByTable = liveSchemas
 	}
 
 	queries, err := extractQueries(cfg.target)
@@ -131,6 +147,21 @@ func runCheck(args []string) error {
 		rules.NewOrderByIndexRule(),
 		rules.NewJoinIndexRule(),
 	)
+
+	// Add MySQL-specific rules
+	if cfg.dbType == "mysql" {
+		engine = advisor.NewEngine(
+			rules.NewLeftmostMatchRule(),
+			rules.NewFunctionIndexRule(),
+			rules.NewTypeMismatchRule(),
+			rules.NewLikePrefixRule(),
+			rules.NewOrderByIndexRule(),
+			rules.NewJoinIndexRule(),
+			rules.NewInvisibleIndexRule(),
+			rules.NewDescendingIndexRule(),
+			rules.NewHashIndexRangeRule(),
+		)
+	}
 
 	var suggestions []advisor.Suggestion
 	for _, query := range queries {
@@ -628,9 +659,105 @@ func writeReport(rep report, useStdout bool) error {
 	return err
 }
 
+func loadLiveSchema(dsn, dbType string) (map[string]advisor.TableSchema, error) {
+	db, err := sql.Open(dbType, dsn)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open database: %w", err)
+	}
+	defer db.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Get all tables
+	var tables []string
+	if dbType == "mysql" {
+		rows, err := db.QueryContext(ctx, "SHOW TABLES")
+		if err != nil {
+			return nil, fmt.Errorf("failed to query tables: %w", err)
+		}
+		for rows.Next() {
+			var table string
+			if err := rows.Scan(&table); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			tables = append(tables, table)
+		}
+		rows.Close()
+	} else {
+		rows, err := db.QueryContext(ctx, "SELECT tablename FROM pg_tables WHERE schemaname = 'public'")
+		if err != nil {
+			return nil, fmt.Errorf("failed to query tables: %w", err)
+		}
+		for rows.Next() {
+			var table string
+			if err := rows.Scan(&table); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			tables = append(tables, table)
+		}
+		rows.Close()
+	}
+
+	schemasByTable := make(map[string]advisor.TableSchema)
+
+	for _, table := range tables {
+		var indexes []advisor.IndexInfo
+
+		if dbType == "mysql" {
+			provider := mysql.NewMetadataProvider(db)
+			indexInfos, err := provider.Indexes(ctx, table)
+			if err != nil {
+				return nil, fmt.Errorf("failed to get indexes for %s: %w", table, err)
+			}
+			for _, idx := range indexInfos {
+				indexes = append(indexes, advisor.IndexInfo{
+					Name:     idx.Name,
+					Columns:  idx.Columns,
+					Unique:   idx.Unique,
+					Method:   idx.Method,
+					IsBTree:  idx.IsBTree,
+					Metadata: map[string]any{"table": idx.Table},
+				})
+			}
+		} else {
+			provider := postgres.NewMetadataProvider(db)
+			indexInfos, err := provider.Indexes(ctx, table)
+			if err != nil {
+				return nil, fmt.Errorf("failed to get indexes for %s: %w", table, err)
+			}
+			for _, idx := range indexInfos {
+				indexes = append(indexes, advisor.IndexInfo{
+					Name:     idx.Name,
+					Columns:  idx.Columns,
+					Unique:   idx.Unique,
+					Method:   idx.Method,
+					IsBTree:  idx.IsBTree,
+					Metadata: map[string]any{"table": idx.Table},
+				})
+			}
+		}
+
+		schemasByTable[table] = advisor.TableSchema{
+			TableName: table,
+			Indexes:   indexes,
+		}
+	}
+
+	return schemasByTable, nil
+}
+
 func printUsage() {
 	fmt.Fprintln(os.Stderr, "Usage:")
-	fmt.Fprintln(os.Stderr, "  gore-lint check [--dsn <dsn> | --schema <file>] [--stdout] <target>")
+	fmt.Fprintln(os.Stderr, "  gore-lint check [--dsn <dsn> | --schema <file>] [--db-type <type>] [--stdout] <target>")
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, "Flags:")
+	fmt.Fprintln(os.Stderr, "  --dsn <dsn>          database DSN for live schema")
+	fmt.Fprintln(os.Stderr, "  --schema <file>      path to schema cache JSON")
+	fmt.Fprintln(os.Stderr, "  --db-type <type>     database type: postgres or mysql (default: postgres)")
+	fmt.Fprintln(os.Stderr, "  --stdout             write diagnostics to stdout (default: true)")
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "Commands:")
 	fmt.Fprintln(os.Stderr, "  check        Analyze source paths and report index risks")

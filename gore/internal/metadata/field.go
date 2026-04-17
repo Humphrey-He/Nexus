@@ -16,3 +16,9 @@ type FieldMeta struct {
 	Type   reflect.Type
 	Index  bool
 }
+
+// ColumnInfo holds column metadata from database.
+type ColumnInfo struct {
+	Name string
+	Type string
+}

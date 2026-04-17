@@ -6,6 +6,7 @@ type QueryAST struct {
 	Columns []string
 	Where   []string
 	OrderBy []string
+	GroupBy []string
 	Limit   int
 	Offset  int
 }

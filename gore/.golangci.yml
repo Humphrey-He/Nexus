@@ -1,0 +1,154 @@
+# ===============================================================================
+# Gore Lint - golangci-lint configuration
+# ===============================================================================
+
+run:
+  timeout: 5m
+  modules-download-mode: readonly
+  go: '1.22'
+
+# Output configuration
+output:
+  format: colored-line-number
+  print-issued-lines: true
+  print-linter-name: true
+  uniq-by-line: true
+
+# Linters to run
+linters:
+  disable-all: true
+  enable:
+    # Core linters
+    - errcheck      # Check for unchecked errors
+    - gosimple      # Simplify code
+    - govet         # Reports suspicious constructs
+    - ineffassign   # Detects unused variable assignments
+    - staticcheck    # Static analysis checks
+    - unused        # Checks for unused code
+
+    # Style and complexity
+    - bodyclose     # Checks whether HTTP response body is closed
+    - dogsled       # Checks for too many blank identifiers
+    - dupl          # Code clone detection
+    - errorlint     # Find issues with error wrapping
+    - exhaustive    # Check exhaustiveness of enum switch statements
+    - copyloopvar   # Detects places where loop variables are copied
+    - gochecknoinits # Checks that no init functions are present
+    - goconst       # Finds repeated strings that could be constants
+    - gocritic      # Provides diagnostics that check for bugs and style issues
+    - gofmt         # Checks whether code was gofmt-ed
+    - goimports      # Check import statements are formatted
+    - misspell      # Finds commonly misspelled English words
+    - nakedret      # Finds naked returns in long functions
+    - prealloc      # Finds range loops that could be preallocated
+    - revive        # Fast, configurable linter (drop-in for golint)
+    - unconvert     # Detects unnecessary type conversions
+    - unparam       # Reports unused function parameters
+    - whitespace    # Checks for unnecessary whitespace
+
+    # Performance
+    - alloc         # Finds unused allocations
+    - prealloc      # Preallocate slice literals
+
+    # SQL/Lint specific (our domain)
+    - execinquery   # Check query execution in loops
+
+  # Exclude linters not used in this project
+  presets:
+    - bugs
+    - metalinter
+    - module
+    - performance
+    - style
+
+# Linter settings
+linters-settings:
+  errcheck:
+    check-type-assertions: true
+    check-blank: true
+
+  govet:
+    enable-all: true
+
+  staticcheck:
+    checks:
+      - "all"
+      - "-SA1012" # deprecated time methods, acceptable for now
+      - "-SA2002" # flaky test, needs investigation
+
+  gocritic:
+    enabled-tags:
+      - diagnostic
+      - performance
+      - style
+      - experimental
+
+  gofmt:
+    simplify: true
+
+  goimports:
+    local-prefixes: gore
+
+  nakedret:
+    max-func-lines: 30
+
+  revive:
+    rules:
+      - name: blank-imports
+      - name: context-as-argument
+      - name: context-keys-type
+      - name: error-return
+      - name: error-strings
+      - name: error-naming
+      - name: exported
+      - name: increment-decrement
+      - name: var-naming
+      - name: var-declaration
+      - name: package-comments
+      - name: range
+      - name: receiver-naming
+      - name: time-naming
+      - name: unexported-return
+      - name: indent-error-flow
+      - name: errorf
+
+  dupl:
+    threshold: 150
+
+  goconst:
+    min-len: 3
+    min-occurrences: 3
+
+# Issues to exclude
+issues:
+  exclude-use-default: false
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+  # Excluded errors
+  exclude-rules:
+    # Ignore common testing patterns
+    - path: _test\.go
+      linters:
+        - dupl
+        - goconst
+        - gochecknoinits
+        - errorlint
+
+    # Ignore SQL string concatenation (we build SQL via AST)
+    - text: "Sprintf"
+      linters:
+        - gochecknoinits
+
+    # Ignore TODOs in test files
+    - path: _test\.go
+      text: "TODO"
+      linters:
+        - revive
+
+# Path to exclude from analysis
+exclude:
+  - 'vendor/'
+  - '*/vendor/'
+  - '*/mocks/'
+  - '*.pb.go'

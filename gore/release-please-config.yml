@@ -1,0 +1,70 @@
+# Release Please configuration
+# See: https://github.com/googleapis/release-please
+
+release-type: go
+package-name: gore-lint
+target-branch: main
+
+# Semantic PR title conventional commits
+conventional-commits: true
+
+# Generate release notes from conventional commits
+generate-notes:
+  - method: conventional-changelog
+    output: CHANGELOG.md
+    repoOrg: gore-io
+    repoName: gore
+
+# Changelog sections
+changelog-sections:
+  - type: feat
+    section: Features
+    hidden: false
+  - type: fix
+    section: Bug Fixes
+    hidden: false
+  - type: docs
+    section: Documentation
+    hidden: false
+  - type: refactor
+    section: Code Refactoring
+    hidden: false
+  - type: perf
+    section: Performance Improvements
+    hidden: false
+  - type: test
+    section: Tests
+    hidden: false
+  - type: build
+    section: Build System
+    hidden: false
+  - type: ci
+    section: Continuous Integration
+    hidden: false
+  - type: chore
+    section: Maintenance
+    hidden: false
+
+# Versioning strategy
+versioning: semver
+
+# Handle sharp major versions
+major-version-zero: true
+
+# Include commit footer or breaking changes
+breaking-change-format: |
+  ## Breaking Changes
+
+  {{range .BreakingChanges}}
+  - {{.Message}}
+  {{end}}
+
+# Merge pull requests after release
+merge: true
+
+# Include or exclude commits
+include-component-in-tag: false
+
+# Pull request configuration
+pull-request-title-pattern: "chore: release ${version}"
+pull-request-header: "Release Please"

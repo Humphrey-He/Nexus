@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - main
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: write
@@ -11,14 +14,28 @@ permissions:
 
 jobs:
   release-please:
+    name: Release Please
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Release Please
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache: true
+
+      - name: Run Release Please
+        id: release
         uses: googleapis/release-please-action@v4
         with:
           release-type: go
           package-name: gore-lint
           target-branch: main
+          config-file: release-please-config.yml
+
+      - name: Show outputs
+        run: |
+          echo "Release version: ${{ steps.release.outputs.release_version }}"
+          echo "Released: ${{ steps.release.outputs.released }}"

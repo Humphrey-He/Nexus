@@ -84,10 +84,11 @@ type ColumnInfo struct {
 
 // IndexInfo describes an index for advisor analysis.
 type IndexInfo struct {
-	Name     string         `json:"name"`
-	Columns  []string      `json:"columns,omitempty"`
-	Unique   bool          `json:"unique"`
-	Method   string        `json:"method"`
-	IsBTree  bool          `json:"isBtree"`
-	Metadata map[string]any `json:"metadata,omitempty"`
+	Name       string         `json:"name"`
+	Columns    []string      `json:"columns,omitempty"`
+	Unique     bool          `json:"unique"`
+	Method     string        `json:"method"`
+	IsBTree    bool          `json:"isBtree"`
+	IsVisible  bool          `json:"isVisible"` // MySQL 8.0+ invisible index flag
+	Metadata   map[string]any `json:"metadata,omitempty"`
 }

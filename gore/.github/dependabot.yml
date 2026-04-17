@@ -1,0 +1,61 @@
+version: 2
+updates:
+  # Enable version updates for npm packages (VS Code extension)
+  - package-ecosystem: "npm"
+    directory: "/extensions/vscode"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps"
+    labels:
+      - "dependencies"
+      - "vscode"
+    groups:
+      production-dependencies:
+        dependency-type: "production"
+      development-dependencies:
+        dependency-type: "development"
+
+  # Enable version updates for GitHub Actions
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: "ci"
+    labels:
+      - "ci"
+      - "dependencies"
+    groups:
+      actions:
+        patterns:
+          - "*"
+
+  # Enable version updates for Go modules
+  - package-ecosystem: "gomod"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps"
+    labels:
+      - "dependencies"
+      - "go"
+    groups:
+      production-dependencies:
+        dependency-type: "production"
+      development-dependencies:
+        dependency-type: "development"
+    ignore:
+      # Ignore patch updates for production dependencies
+      - dependency-name: "*"
+        update-types: ["version-update:semver-patch"]

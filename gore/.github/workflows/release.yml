@@ -4,14 +4,40 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag (e.g., v1.0.0)'
+        required: true
 
 permissions:
   contents: write
+  packages: write
+
+env:
+  GO_VERSION: '1.22'
 
 jobs:
-  release:
-    name: Release
-    runs-on: ubuntu-latest
+  # ===========================================================================
+  # Build binaries for all platforms
+  # ===========================================================================
+  build:
+    name: Build for ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        include:
+          - os: ubuntu-latest
+            artifact_name: gore-lint-linux-amd64
+            artifact_ext: ''
+          - os: windows-latest
+            artifact_name: gore-lint-windows-amd64
+            artifact_ext: .exe
+          - os: macos-latest
+            artifact_name: gore-lint-darwin-amd64
+            artifact_ext: ''
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -19,32 +45,229 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          go-version: ${{ env.GO_VERSION }}
           cache: true
 
+      - name: Get version
+        id: version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
       - name: Build
-        run: go build -ldflags="-s -w" -o gore-lint ./cmd/gore-lint
+        run: |
+          CGO_ENABLED=0 go build \
+            -ldflags="-s -w -X main.version=${{ steps.version.outputs.VERSION }}" \
+            -o ${{ matrix.artifact_name }}${{ matrix.artifact_ext }} \
+            ./cmd/gore-lint
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.artifact_name }}${{ matrix.artifact_ext }}
+          retention-days: 30
+
+  # ===========================================================================
+  # Build Docker image
+  # ===========================================================================
+  docker:
+    name: Build Docker Image
+    runs-on: ubuntu-latest
+    needs: [build]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Get version
+        id: version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      - name: Login to Docker Hub
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Login to GitHub Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: |
+            goreio/gore-lint:${{ steps.version.outputs.VERSION }}
+            goreio/gore-lint:latest
+            ghcr.io/${{ github.repository }}:${{ steps.version.outputs.VERSION }}
+            ghcr.io/${{ github.repository }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Generate SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          image: goreio/gore-lint:${{ steps.version.outputs.VERSION }}
+          format: spdx-json
+          output-file: sbom.spdx.json
+
+      - name: Upload SBOM
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: sbom.spdx.json
+          retention-days: 30
+
+  # ===========================================================================
+  # Package VSIX extension
+  # ===========================================================================
+  vsix:
+    name: Package VSIX
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'npm'
-          cache-dependency-path: extensions/vscode/package-lock.json
+          cache-dependency-path: gore/extensions/vscode/package-lock.json
 
       - name: Install vsce
         run: npm install -g @vscode/vsce
 
+      - name: Get version
+        id: version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
       - name: Package VSIX
-        working-directory: extensions/vscode
-        run: vsce package --allow-missing-repository
+        working-directory: gore/extensions/vscode
+        run: |
+          vsce package \
+            --version ${{ steps.version.outputs.VERSION }} \
+            --allow-missing-repository \
+            -o gore-lint-${{ steps.version.outputs.VERSION }}.vsix
+
+      - name: Upload VSIX
+        uses: actions/upload-artifact@v4
+        with:
+          name: gore-lint-vscode-${{ steps.version.outputs.VERSION }}
+          path: gore/extensions/vscode/gore-lint-*.vsix
+          retention-days: 30
+
+  # ===========================================================================
+  # Create GitHub Release
+  # ===========================================================================
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    needs: [build, docker, vsix]
+    outputs:
+      upload_url: ${{ steps.create_release.outputs.upload_url }}
+      version: ${{ steps.version.outputs.VERSION }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: gore-lint-*
+          merge-multiple: true
+
+      - name: Get version
+        id: version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
 
       - name: Create Release
+        id: create_release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ github.ref_name }}
+          name: Gore Lint ${{ github.ref_name }}
+          draft: false
+          prerelease: ${{ contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') || contains(github.ref_name, 'rc') }}
+          generate_release_notes: true
           files: |
-            gore-lint
-            extensions/vscode/*.vsix
-          draft: true
+            artifacts/gore-lint-*
+            artifacts/*.vsix
+            artifacts/sbom.spdx.json
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create Homebrew formula
+        if: github.event_name != 'pull_request'
+        run: |
+          VERSION=${{ steps.version.outputs.VERSION }}
+          curl -sL https://github.com/gore-io/homebrew-tap/raw/main/Formula/gore-lint.rb \
+            -o homebrew/gore-lint.rb 2>/dev/null || true
+
+  # ===========================================================================
+  # Post-release: Homebrew and Scoop
+  # ===========================================================================
+  homebrew:
+    name: Homebrew Tap Update
+    runs-on: ubuntu-latest
+    needs: [release]
+    if: github.event_name != 'pull_request'
+    steps:
+      - name: Checkout homebrew-tap
+        uses: actions/checkout@v4
+        with:
+          repository: gore-io/homebrew-tap
+          path: homebrew
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+
+      - name: Update formula
+        run: |
+          VERSION=${{ needs.release.outputs.version }}
+          API_URL="https://api.github.com/repos/${{ github.repository }}/releases/tags/${VERSION}"
+          ASSET_URL=$(curl -s $API_URL | jq -r '.assets[] | select(.name | contains("linux-amd64") and endswith("")) | .browser_download_url')
+
+          # Create updated formula
+          cat > homebrew/Formula/gore-lint.rb << 'FORMULA'
+          class GoreLint < Formula
+            desc "SQL index advisor and linter for Go"
+            homepage "https://github.com/gore-io/gore"
+            version "~VERSION~"
+            license "MIT"
+
+            on_macos do
+              if Hardware::CPU.intel?
+                url ASSET_URL
+                sha256 ""
+              end
+            end
+
+            def install
+              bin.install "gore-lint"
+            end
+
+            test do
+              system "#{bin}/gore-lint", "--help"
+            end
+          end
+          FORMULA
+
+      - name: Create PR
+        uses: peter-evans/create-pull-request@v6
+        with:
+          path: homebrew
+          commit-message: "chore(gore-lint): update to ${{ needs.release.outputs.version }}"
+          title: "gore-lint ${{ needs.release.outputs.version }}"
+          body: "Updated gore-lint to version ${{ needs.release.outputs.version }}"
+          branch: update/gore-lint-${{ needs.release.outputs.version }}
+          delete-branch: true
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
