@@ -10,6 +10,16 @@ import (
 // Predicate represents a strongly-typed where predicate.
 type Predicate[T any] func(*dialect.QueryAST)
 
+// JoinType represents the type of JOIN.
+type JoinType = dialect.JoinType
+
+const (
+	JoinInner = dialect.JoinInner
+	JoinLeft  = dialect.JoinLeft
+	JoinRight = dialect.JoinRight
+	JoinFull  = dialect.JoinFull
+)
+
 // Query is a typed query builder.
 type Query[T any] struct {
 	ctx      *Context
@@ -18,8 +28,61 @@ type Query[T any] struct {
 	offset   int
 	order    []string
 	table    string
+	joins    []dialect.JoinClause
 	groupBy  []string
+	having   []string
 	distinct bool
+}
+
+// Join appends an INNER JOIN clause.
+func (q *Query[T]) Join(table, on string) *Query[T] {
+	q.joins = append(q.joins, dialect.JoinClause{
+		Type:  dialect.JoinInner,
+		Table: table,
+		On:    on,
+	})
+	return q
+}
+
+// LeftJoin appends a LEFT JOIN clause.
+func (q *Query[T]) LeftJoin(table, on string) *Query[T] {
+	q.joins = append(q.joins, dialect.JoinClause{
+		Type:  dialect.JoinLeft,
+		Table: table,
+		On:    on,
+	})
+	return q
+}
+
+// RightJoin appends a RIGHT JOIN clause.
+func (q *Query[T]) RightJoin(table, on string) *Query[T] {
+	q.joins = append(q.joins, dialect.JoinClause{
+		Type:  dialect.JoinRight,
+		Table: table,
+		On:    on,
+	})
+	return q
+}
+
+// FullJoin appends a FULL OUTER JOIN clause.
+func (q *Query[T]) FullJoin(table, on string) *Query[T] {
+	q.joins = append(q.joins, dialect.JoinClause{
+		Type:  dialect.JoinFull,
+		Table: table,
+		On:    on,
+	})
+	return q
+}
+
+// LateralJoin appends a LATERAL JOIN clause.
+func (q *Query[T]) LateralJoin(table, on string) *Query[T] {
+	q.joins = append(q.joins, dialect.JoinClause{
+		Type:    dialect.JoinInner,
+		Table:   table,
+		On:      on,
+		Lateral: true,
+	})
+	return q
 }
 
 // Where appends a predicate.
@@ -78,6 +141,14 @@ func (q *Query[T]) WhereLike(field string, pattern string) *Query[T] {
 	return q
 }
 
+// Having appends a HAVING clause.
+func (q *Query[T]) Having(condition string) *Query[T] {
+	if condition != "" {
+		q.having = append(q.having, condition)
+	}
+	return q
+}
+
 // OrderBy appends an order expression.
 func (q *Query[T]) OrderBy(expr string) *Query[T] {
 	if expr != "" {
@@ -123,5 +194,9 @@ func (q *Query[T]) ToAST() *dialect.QueryAST {
 	ast.Limit = q.limit
 	ast.Offset = q.offset
 	ast.OrderBy = append(ast.OrderBy, q.order...)
+	ast.Joins = q.joins
+	ast.GroupBy = q.groupBy
+	ast.Having = q.having
+	ast.Distinct = q.distinct
 	return ast
 }

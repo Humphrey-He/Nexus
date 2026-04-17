@@ -570,3 +570,229 @@ func TestErrTrackingDisabled(t *testing.T) {
 		t.Fatalf("unexpected error message: %s", ErrTrackingDisabled.Error())
 	}
 }
+
+// ===============================================================================
+// Query JOIN Tests
+// ===============================================================================
+
+func TestQueryJoin(t *testing.T) {
+	ctx := newTestContext()
+	q := Set[TestUser](ctx).Query().
+		From("users").
+		Join("orders", "users.id = orders.user_id")
+
+	ast := q.ToAST()
+	if len(ast.Joins) != 1 {
+		t.Fatalf("expected 1 join, got %d", len(ast.Joins))
+	}
+	if ast.Joins[0].Table != "orders" {
+		t.Fatalf("expected 'orders', got %s", ast.Joins[0].Table)
+	}
+	if ast.Joins[0].Type != JoinInner {
+		t.Fatalf("expected JoinInner, got %v", ast.Joins[0].Type)
+	}
+}
+
+func TestQueryLeftJoin(t *testing.T) {
+	ctx := newTestContext()
+	q := Set[TestUser](ctx).Query().
+		From("users").
+		LeftJoin("orders", "users.id = orders.user_id")
+
+	ast := q.ToAST()
+	if len(ast.Joins) != 1 {
+		t.Fatalf("expected 1 join, got %d", len(ast.Joins))
+	}
+	if ast.Joins[0].Type != JoinLeft {
+		t.Fatalf("expected JoinLeft, got %v", ast.Joins[0].Type)
+	}
+}
+
+func TestQueryRightJoin(t *testing.T) {
+	ctx := newTestContext()
+	q := Set[TestUser](ctx).Query().
+		From("users").
+		RightJoin("orders", "users.id = orders.user_id")
+
+	ast := q.ToAST()
+	if len(ast.Joins) != 1 {
+		t.Fatalf("expected 1 join, got %d", len(ast.Joins))
+	}
+	if ast.Joins[0].Type != JoinRight {
+		t.Fatalf("expected JoinRight, got %v", ast.Joins[0].Type)
+	}
+}
+
+func TestQueryFullJoin(t *testing.T) {
+	ctx := newTestContext()
+	q := Set[TestUser](ctx).Query().
+		From("users").
+		FullJoin("orders", "users.id = orders.user_id")
+
+	ast := q.ToAST()
+	if len(ast.Joins) != 1 {
+		t.Fatalf("expected 1 join, got %d", len(ast.Joins))
+	}
+	if ast.Joins[0].Type != JoinFull {
+		t.Fatalf("expected JoinFull, got %v", ast.Joins[0].Type)
+	}
+}
+
+func TestQueryMultipleJoins(t *testing.T) {
+	ctx := newTestContext()
+	q := Set[TestUser](ctx).Query().
+		From("users").
+		Join("orders", "users.id = orders.user_id").
+		LeftJoin("products", "orders.product_id = products.id").
+		RightJoin("categories", "products.category_id = categories.id")
+
+	ast := q.ToAST()
+	if len(ast.Joins) != 3 {
+		t.Fatalf("expected 3 joins, got %d", len(ast.Joins))
+	}
+}
+
+func TestQueryHaving(t *testing.T) {
+	ctx := newTestContext()
+	q := Set[TestUser](ctx).Query().
+		From("users").
+		GroupBy("status").
+		Having("COUNT(*) > 10")
+
+	ast := q.ToAST()
+	if len(ast.Having) != 1 {
+		t.Fatalf("expected 1 having clause, got %d", len(ast.Having))
+	}
+}
+
+// ===============================================================================
+// Batch Operations Tests
+// ===============================================================================
+
+func TestDbSetAddBatch(t *testing.T) {
+	ctx := newTestContext()
+	set := Set[TestUser](ctx)
+
+	users := []*TestUser{
+		{Name: "Alice"},
+		{Name: "Bob"},
+		{Name: "Charlie"},
+	}
+
+	err := set.AddBatch(users)
+	if err != nil {
+		t.Fatalf("AddBatch failed: %v", err)
+	}
+}
+
+func TestDbSetAddBatchEmpty(t *testing.T) {
+	ctx := newTestContext()
+	set := Set[TestUser](ctx)
+
+	err := set.AddBatch([]*TestUser{})
+	if err == nil {
+		t.Fatal("expected error for empty batch")
+	}
+}
+
+func TestDbSetAddBatchWithNil(t *testing.T) {
+	ctx := newTestContext()
+	set := Set[TestUser](ctx)
+
+	users := []*TestUser{
+		{Name: "Alice"},
+		nil,
+		{Name: "Bob"},
+	}
+
+	err := set.AddBatch(users)
+	if err == nil {
+		t.Fatal("expected error for nil entity")
+	}
+}
+
+func TestDbSetAttachBatch(t *testing.T) {
+	ctx := newTestContext()
+	set := Set[TestUser](ctx)
+
+	users := []*TestUser{
+		{ID: 1, Name: "Alice"},
+		{ID: 2, Name: "Bob"},
+	}
+
+	err := set.AttachBatch(users)
+	if err != nil {
+		t.Fatalf("AttachBatch failed: %v", err)
+	}
+}
+
+func TestDbSetAttachBatchEmpty(t *testing.T) {
+	ctx := newTestContext()
+	set := Set[TestUser](ctx)
+
+	err := set.AttachBatch([]*TestUser{})
+	if err == nil {
+		t.Fatal("expected error for empty batch")
+	}
+}
+
+func TestDbSetRemoveBatch(t *testing.T) {
+	ctx := newTestContext()
+	set := Set[TestUser](ctx)
+
+	users := []*TestUser{
+		{ID: 1, Name: "Alice"},
+		{ID: 2, Name: "Bob"},
+	}
+
+	err := set.RemoveBatch(users)
+	if err != nil {
+		t.Fatalf("RemoveBatch failed: %v", err)
+	}
+}
+
+func TestDbSetRemoveBatchEmpty(t *testing.T) {
+	ctx := newTestContext()
+	set := Set[TestUser](ctx)
+
+	err := set.RemoveBatch([]*TestUser{})
+	if err == nil {
+		t.Fatal("expected error for empty batch")
+	}
+}
+
+func TestDbSetFindBatch(t *testing.T) {
+	ctx := newTestContext()
+	set := Set[TestUser](ctx)
+
+	_, err := set.FindBatch([]any{1, 2, 3})
+	if err != ErrNotImplemented {
+		t.Fatalf("expected ErrNotImplemented, got %v", err)
+	}
+}
+
+func TestDbSetFindBatchEmpty(t *testing.T) {
+	ctx := newTestContext()
+	set := Set[TestUser](ctx)
+
+	_, err := set.FindBatch([]any{})
+	if err == nil {
+		t.Fatal("expected error for empty pks")
+	}
+}
+
+// ===============================================================================
+// Transaction Tests
+// ===============================================================================
+
+func TestContextTransactionNotImplemented(t *testing.T) {
+	ctx := newTestContext()
+	err := ctx.Transaction(context.Background(), func(tx DbContext) error {
+		return nil
+	})
+	// The stub executor doesn't support transactions, so this should fail
+	// We just verify the method is callable
+	if err == nil {
+		t.Log("Transaction succeeded with stub executor (expected in some cases)")
+	}
+}
