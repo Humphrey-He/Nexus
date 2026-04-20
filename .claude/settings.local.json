@@ -1,0 +1,32 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(go build:*)",
+      "Bash(go test:*)",
+      "Bash(go get:*)",
+      "Bash(go mod:*)",
+      "Bash(wc -l gore/**/*.go gore/**/**/*.go)",
+      "Bash(find . -name \"*.go\" -not -path \"./vendor/*\" -exec wc -l {} +)",
+      "Bash(go tool:*)",
+      "Bash(docker run:*)",
+      "Bash(docker exec:*)",
+      "Bash(GORE_DSN=\"postgres://gore:gore123@localhost:5432/gore?sslmode=disable\" go run /tmp/test_pg.go)",
+      "Bash(./gore-lint.exe schema:*)",
+      "Read(//tmp/**)",
+      "Bash(./gore-lint.exe --help)",
+      "Bash(./gore-lint.exe check:*)",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(f'Total: {d[\\\\\"stats\\\\\"][\\\\\"total\\\\\"]}, Warnings: {d[\\\\\"stats\\\\\"][\\\\\"warn\\\\\"]}, Info: {d[\\\\\"stats\\\\\"][\\\\\"info\\\\\"]}'\\)\")",
+      "Bash(ls -la *.go)",
+      "Bash(ls cmd/gore-lint/*.go)",
+      "Bash(ls -la *.html)",
+      "Bash(npm install:*)",
+      "Bash(npx vsce:*)",
+      "Bash(go run *)",
+      "Bash(docker start go-micro-mysql-1 *)",
+      "Bash(docker port go-micro-mysql-1 *)",
+      "Bash(grep -E \"\\\\.\\(yml|yaml|dockerignore|dockerfile|Makefile\\)$\")",
+      "Bash(git add *)",
+      "Bash(git commit *)"
+    ]
+  }
+}

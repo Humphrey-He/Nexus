@@ -1,0 +1,35 @@
+# gore-lint Configuration
+
+# Database connection
+dsn: postgres://gore:gore123@localhost:5432/gore?sslmode=disable
+db-type: postgres
+
+# Output format
+format: text
+stdout: true
+
+# Paths to analyze
+targets:
+  - ./testcode/
+  - ./gore/examples/
+
+# Paths to exclude
+exclude:
+  - vendor/
+  - "*_test.go"
+  - "*.pb.go"
+
+# Rules configuration
+rules:
+  # Enable all rules by default
+  enabled: true
+
+  # Disable specific rules if needed
+  # disabled:
+  #   - IDX-001
+  #   - IDX-002
+
+# Severity thresholds
+severity:
+  fail-on: critical  # Fail CI on critical issues
+  warn-on: high      # Warn on high severity issues

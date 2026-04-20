@@ -23,6 +23,7 @@ import (
 	"gore/dialect/postgres"
 	"gore/internal/advisor"
 	"gore/internal/advisor/rules"
+	"gore/internal/migrate"
 )
 
 type config struct {
@@ -74,6 +75,8 @@ func run(args []string) error {
 	switch cmd {
 	case "check":
 		return runCheck(args[1:])
+	case "migrate":
+		return runMigrate(args[1:])
 	case "-h", "--help", "help":
 		printUsage()
 		return nil
@@ -749,16 +752,271 @@ func loadLiveSchema(dsn, dbType string) (map[string]advisor.TableSchema, error) 
 	return schemasByTable, nil
 }
 
+func runMigrate(args []string) error {
+	if len(args) == 0 {
+		printMigrateUsage()
+		return nil
+	}
+
+	subCmd := args[0]
+	switch subCmd {
+	case "up":
+		return runMigrateUp(args[1:])
+	case "down":
+		return runMigrateDown(args[1:])
+	case "create":
+		return runMigrateCreate(args[1:])
+	case "status":
+		return runMigrateStatus(args[1:])
+	case "-h", "--help", "help":
+		printMigrateUsage()
+		return nil
+	default:
+		return fmt.Errorf("unknown migrate subcommand: %s", subCmd)
+	}
+}
+
+func printMigrateUsage() {
+	fmt.Fprintln(os.Stderr, "Usage:")
+	fmt.Fprintln(os.Stderr, "  gore-lint migrate up [--dsn <dsn>] [--dir <path>]")
+	fmt.Fprintln(os.Stderr, "  gore-lint migrate down [--dsn <dsn>] [--dir <path>] [--steps <n>]")
+	fmt.Fprintln(os.Stderr, "  gore-lint migrate create [--dir <path>] <name>")
+	fmt.Fprintln(os.Stderr, "  gore-lint migrate status [--dsn <dsn>] [--dir <path>]")
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, "Subcommands:")
+	fmt.Fprintln(os.Stderr, "  up       Apply pending migrations")
+	fmt.Fprintln(os.Stderr, "  down     Rollback migrations")
+	fmt.Fprintln(os.Stderr, "  create   Create new migration files")
+	fmt.Fprintln(os.Stderr, "  status   Show migration status")
+}
+
+func runMigrateUp(args []string) error {
+	fs := flag.NewFlagSet("migrate up", flag.ContinueOnError)
+	dsn := fs.String("dsn", "", "database DSN")
+	dir := fs.String("dir", "migrations", "migrations directory")
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	if *dsn == "" {
+		return fmt.Errorf("--dsn is required")
+	}
+
+	db, err := sql.Open("postgres", *dsn)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+
+	runner := migrate.NewRunner(db)
+	ctx := context.Background()
+
+	if err := runner.Init(ctx); err != nil {
+		return fmt.Errorf("failed to initialize migrations table: %w", err)
+	}
+
+	migrations, err := migrate.LoadMigrations(*dir)
+	if err != nil {
+		return fmt.Errorf("failed to load migrations: %w", err)
+	}
+
+	applied, err := runner.AppliedVersions(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get applied versions: %w", err)
+	}
+
+	appliedSet := make(map[string]bool)
+	for _, v := range applied {
+		appliedSet[v] = true
+	}
+
+	count := 0
+	for _, m := range migrations {
+		if appliedSet[m.Version] {
+			continue
+		}
+
+		fmt.Printf("Applying migration %s: %s\n", m.Version, m.Name)
+		if err := runner.Up(ctx, m); err != nil {
+			return fmt.Errorf("migration failed: %w", err)
+		}
+		count++
+	}
+
+	if count == 0 {
+		fmt.Println("No pending migrations")
+	} else {
+		fmt.Printf("Applied %d migration(s)\n", count)
+	}
+
+	return nil
+}
+
+func runMigrateDown(args []string) error {
+	fs := flag.NewFlagSet("migrate down", flag.ContinueOnError)
+	dsn := fs.String("dsn", "", "database DSN")
+	dir := fs.String("dir", "migrations", "migrations directory")
+	steps := fs.Int("steps", 1, "number of migrations to rollback")
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	if *dsn == "" {
+		return fmt.Errorf("--dsn is required")
+	}
+
+	db, err := sql.Open("postgres", *dsn)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+
+	runner := migrate.NewRunner(db)
+	ctx := context.Background()
+
+	migrations, err := migrate.LoadMigrations(*dir)
+	if err != nil {
+		return fmt.Errorf("failed to load migrations: %w", err)
+	}
+
+	applied, err := runner.AppliedVersions(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get applied versions: %w", err)
+	}
+
+	if len(applied) == 0 {
+		fmt.Println("No migrations to rollback")
+		return nil
+	}
+
+	migrationsMap := make(map[string]*migrate.Migration)
+	for _, m := range migrations {
+		migrationsMap[m.Version] = m
+	}
+
+	count := 0
+	for i := len(applied) - 1; i >= 0 && count < *steps; i-- {
+		version := applied[i]
+		m, exists := migrationsMap[version]
+		if !exists {
+			return fmt.Errorf("migration file not found for version %s", version)
+		}
+
+		fmt.Printf("Rolling back migration %s: %s\n", m.Version, m.Name)
+		if err := runner.Down(ctx, m); err != nil {
+			return fmt.Errorf("rollback failed: %w", err)
+		}
+		count++
+	}
+
+	fmt.Printf("Rolled back %d migration(s)\n", count)
+	return nil
+}
+
+func runMigrateCreate(args []string) error {
+	fs := flag.NewFlagSet("migrate create", flag.ContinueOnError)
+	dir := fs.String("dir", "migrations", "migrations directory")
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	rest := fs.Args()
+	if len(rest) == 0 {
+		return fmt.Errorf("migration name is required")
+	}
+
+	name := strings.Join(rest, " ")
+	upFile, downFile, err := migrate.CreateMigration(*dir, name)
+	if err != nil {
+		return fmt.Errorf("failed to create migration: %w", err)
+	}
+
+	fmt.Printf("Created migration files:\n")
+	fmt.Printf("  %s\n", upFile)
+	fmt.Printf("  %s\n", downFile)
+
+	return nil
+}
+
+func runMigrateStatus(args []string) error {
+	fs := flag.NewFlagSet("migrate status", flag.ContinueOnError)
+	dsn := fs.String("dsn", "", "database DSN")
+	dir := fs.String("dir", "migrations", "migrations directory")
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	if *dsn == "" {
+		return fmt.Errorf("--dsn is required")
+	}
+
+	db, err := sql.Open("postgres", *dsn)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+
+	runner := migrate.NewRunner(db)
+	ctx := context.Background()
+
+	if err := runner.Init(ctx); err != nil {
+		return fmt.Errorf("failed to initialize migrations table: %w", err)
+	}
+
+	migrations, err := migrate.LoadMigrations(*dir)
+	if err != nil {
+		return fmt.Errorf("failed to load migrations: %w", err)
+	}
+
+	applied, err := runner.AppliedVersions(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get applied versions: %w", err)
+	}
+
+	appliedSet := make(map[string]bool)
+	for _, v := range applied {
+		appliedSet[v] = true
+	}
+
+	fmt.Println("Migration Status:")
+	fmt.Println("Version          | Name                           | Status")
+	fmt.Println("-----------------|--------------------------------|--------")
+
+	for _, m := range migrations {
+		status := "pending"
+		if appliedSet[m.Version] {
+			status = "applied"
+		}
+		fmt.Printf("%-16s | %-30s | %s\n", m.Version, m.Name, status)
+	}
+
+	return nil
+}
+
 func printUsage() {
 	fmt.Fprintln(os.Stderr, "Usage:")
 	fmt.Fprintln(os.Stderr, "  gore-lint check [--dsn <dsn> | --schema <file>] [--db-type <type>] [--stdout] <target>")
+	fmt.Fprintln(os.Stderr, "  gore-lint migrate <subcommand> [flags]")
 	fmt.Fprintln(os.Stderr, "")
-	fmt.Fprintln(os.Stderr, "Flags:")
+	fmt.Fprintln(os.Stderr, "Commands:")
+	fmt.Fprintln(os.Stderr, "  check                Analyze source paths and report index risks")
+	fmt.Fprintln(os.Stderr, "  migrate up           Apply pending migrations")
+	fmt.Fprintln(os.Stderr, "  migrate down         Rollback migrations")
+	fmt.Fprintln(os.Stderr, "  migrate create       Create new migration files")
+	fmt.Fprintln(os.Stderr, "  migrate status       Show migration status")
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, "Check Flags:")
 	fmt.Fprintln(os.Stderr, "  --dsn <dsn>          database DSN for live schema")
 	fmt.Fprintln(os.Stderr, "  --schema <file>      path to schema cache JSON")
 	fmt.Fprintln(os.Stderr, "  --db-type <type>     database type: postgres or mysql (default: postgres)")
 	fmt.Fprintln(os.Stderr, "  --stdout             write diagnostics to stdout (default: true)")
 	fmt.Fprintln(os.Stderr, "")
-	fmt.Fprintln(os.Stderr, "Commands:")
-	fmt.Fprintln(os.Stderr, "  check        Analyze source paths and report index risks")
+	fmt.Fprintln(os.Stderr, "Migrate Flags:")
+	fmt.Fprintln(os.Stderr, "  --dsn <dsn>          database DSN (required for up/down/status)")
+	fmt.Fprintln(os.Stderr, "  --dir <path>         migrations directory (default: migrations)")
+	fmt.Fprintln(os.Stderr, "  --steps <n>          number of migrations to rollback (down only, default: 1)")
 }

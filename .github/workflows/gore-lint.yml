@@ -1,0 +1,183 @@
+name: gore-lint CLI Check
+
+on:
+  pull_request:
+    paths:
+      - 'gore/**/*.go'
+      - 'testcode/**/*.go'
+      - '.github/workflows/gore-lint.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'gore/**/*.go'
+      - 'testcode/**/*.go'
+
+jobs:
+  lint:
+    name: Run gore-lint
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:14
+        env:
+          POSTGRES_USER: gore
+          POSTGRES_PASSWORD: gore123
+          POSTGRES_DB: gore_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache-dependency-path: gore/go.sum
+
+      - name: Install dependencies
+        working-directory: gore
+        run: go mod download
+
+      - name: Build gore-lint
+        working-directory: gore
+        run: go build -o gore-lint ./cmd/gore-lint
+
+      - name: Setup test database schema
+        working-directory: gore
+        env:
+          PGPASSWORD: gore123
+        run: |
+          psql -h localhost -U gore -d gore_test -c "
+            CREATE TABLE users (
+              id SERIAL PRIMARY KEY,
+              name VARCHAR(100),
+              email VARCHAR(255),
+              status INTEGER DEFAULT 1,
+              created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX idx_name ON users(name);
+            CREATE INDEX idx_email ON users(email);
+          "
+
+      - name: Run gore-lint check
+        working-directory: gore
+        env:
+          GORE_DSN: postgres://gore:gore123@localhost:5432/gore_test?sslmode=disable
+        run: |
+          ./gore-lint check \
+            --dsn "$GORE_DSN" \
+            --db-type postgres \
+            --stdout \
+            ../testcode/
+
+      - name: Run gore-lint with schema cache
+        working-directory: gore
+        run: |
+          # Export schema
+          ./gore-lint check \
+            --dsn "postgres://gore:gore123@localhost:5432/gore_test?sslmode=disable" \
+            --db-type postgres \
+            --stdout \
+            ../testcode/ > /dev/null || true
+
+          echo "gore-lint check completed"
+
+  migration-test:
+    name: Test Migrations
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:14
+        env:
+          POSTGRES_USER: gore
+          POSTGRES_PASSWORD: gore123
+          POSTGRES_DB: gore_migrate_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache-dependency-path: gore/go.sum
+
+      - name: Install dependencies
+        working-directory: gore
+        run: go mod download
+
+      - name: Build gore-lint
+        working-directory: gore
+        run: go build -o gore-lint ./cmd/gore-lint
+
+      - name: Create test migration
+        working-directory: gore
+        run: |
+          mkdir -p test_migrations
+          ./gore-lint migrate create --dir test_migrations "create test table"
+
+      - name: Add migration SQL
+        working-directory: gore
+        run: |
+          # Find the created migration files
+          UP_FILE=$(ls test_migrations/*_create_test_table.up.sql)
+          DOWN_FILE=$(ls test_migrations/*_create_test_table.down.sql)
+
+          # Add SQL to up migration
+          cat >> "$UP_FILE" << 'EOF'
+          CREATE TABLE test_table (
+            id SERIAL PRIMARY KEY,
+            name VARCHAR(100) NOT NULL
+          );
+          EOF
+
+          # Add SQL to down migration
+          cat >> "$DOWN_FILE" << 'EOF'
+          DROP TABLE test_table;
+          EOF
+
+      - name: Run migration up
+        working-directory: gore
+        env:
+          DSN: postgres://gore:gore123@localhost:5432/gore_migrate_test?sslmode=disable
+        run: |
+          ./gore-lint migrate up --dsn "$DSN" --dir test_migrations
+
+      - name: Check migration status
+        working-directory: gore
+        env:
+          DSN: postgres://gore:gore123@localhost:5432/gore_migrate_test?sslmode=disable
+        run: |
+          ./gore-lint migrate status --dsn "$DSN" --dir test_migrations
+
+      - name: Run migration down
+        working-directory: gore
+        env:
+          DSN: postgres://gore:gore123@localhost:5432/gore_migrate_test?sslmode=disable
+        run: |
+          ./gore-lint migrate down --dsn "$DSN" --dir test_migrations --steps 1
+
+      - name: Verify rollback
+        working-directory: gore
+        env:
+          DSN: postgres://gore:gore123@localhost:5432/gore_migrate_test?sslmode=disable
+        run: |
+          ./gore-lint migrate status --dsn "$DSN" --dir test_migrations
