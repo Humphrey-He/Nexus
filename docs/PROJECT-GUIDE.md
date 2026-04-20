@@ -11,14 +11,28 @@
 | 模块 | 完成度 | 状态 |
 |------|--------|------|
 | API (DbContext/DbSet) | 94% | ✅ 主力开发 |
-| Query Builder | 94% | ✅ 主力开发 |
+| Query Builder (含 JOIN) | 95% | ✅ 主力开发 |
 | Index Advisor 规则 | 90% | ✅ 主力开发 |
-| gore-lint CLI | 77% | ✅ 可用 |
-| Change Tracker | 60% | ⚠️ 部分完成 |
+| gore-lint CLI | 85% | ✅ 可用 |
+| Change Tracker | 80% | ✅ 可用 |
 | PostgreSQL 方言 | 100% | ✅ 完成 |
-| MySQL 方言 | 0% | 🔴 待开发 |
+| MySQL 方言 (含 Invisible/Downgrade Index) | 100% | ✅ 完成 |
+| 事务支持 | 80% | ✅ 可用 |
+| 批量操作 | 80% | ✅ 可用 |
+| 日志框架 | 100% | ✅ 完成 |
+| 连接池 | 100% | ✅ 完成 |
+| 错误标准化 | 100% | ✅ 完成 |
 
-**总体完成度**: ~78%
+**总体完成度**: ~88%
+
+**测试覆盖率**:
+| 模块 | 覆盖率 |
+|------|--------|
+| gore/api | 73.4% |
+| gore/dialect/mysql | 93.4% |
+| gore/dialect/postgres | 92.7% |
+| gore/internal/advisor/rules | 85.0% |
+| gore/internal/errors | 93.8% |
 
 ## 核心功能
 
@@ -63,41 +77,49 @@ gore-lint check --schema schema.json --format sarif ./... > report.sarif
 Nexus/
 ├── SDD.md                    # 软件概要设计文档
 ├── CHANGELOG.md              # 变更日志
+├── LICENSE                   # MIT 开源协议
+├── CONTRIBUTING.md           # 贡献指南
+├── SECURITY.md               # 安全披露政策
 ├── gore/                     # 核心 ORM 模块
-│   ├── api/                  # DbContext, DbSet, Query Builder
+│   ├── api/                  # DbContext, DbSet, Query Builder, Logger
 │   ├── dialect/             # 数据库方言抽象
-│   │   └── postgres/        # PostgreSQL 实现
+│   │   ├── postgres/        # PostgreSQL 实现
+│   │   └── mysql/           # MySQL 实现 (含 Invisible/Downgrade Index)
 │   ├── internal/
+│   │   ├── errors/          # 标准化错误处理
+│   │   ├── executor/         # SQL 执行器 + 连接池
 │   │   ├── advisor/          # 索引诊断引擎
-│   │   │   └── rules/        # 诊断规则
+│   │   │   └── rules/        # 诊断规则 (IDX-001 ~ IDX-010 + MySQL)
 │   │   ├── tracker/          # 变更追踪
-│   │   ├── executor/          # SQL 执行器
 │   │   └── metadata/          # 元数据管理
 │   ├── cmd/gore-lint/        # CLI 工具
-│   └── tests/                # 测试用例
+│   ├── config/               # 配置管理
+│   ├── tests/                # 单元测试
+│   └── testcode/              # 用户示例测试
 ├── docs/
 │   ├── api/                  # API 文档
 │   ├── design/               # 设计文档
 │   ├── rfc/                  # RFC 提案
-│   └── roadmap/              # 路线图
+│   └── roadmap/               # 路线图
 └── .github/workflows/        # CI/CD 配置
 ```
 
 ## 技术栈
 
 - **语言**: Go 1.22+
-- **数据库**: PostgreSQL (已支持), MySQL (规划)
-- **测试**: go-sqlmock
-- **依赖**: lib/pq (PostgreSQL 驱动)
+- **数据库**: PostgreSQL ✅, MySQL 8.0+ ✅
+- **测试**: go-sqlmock, MySQL 8.0 (Docker)
+- **依赖**: lib/pq (PostgreSQL), go-sql-driver/mysql
 
 ## 版本历史
 
 - **v0.1-alpha.1** (2026-03-13): 初始版本，核心 API 骨架
-- **Unreleased**: 变更追踪、Index Advisor 规则完善
+- **v0.2** (2026-04-17): MySQL 支持、CI/CD 完善、测试覆盖提升
+- **v0.3** (2026-04-20): JOIN 支持、事务、批量操作、日志、连接池、错误标准化
 
 ## 许可证
 
-内部研发试验用途。
+MIT License - 详见 [LICENSE](../LICENSE)
 
 ## 相关文档
 
