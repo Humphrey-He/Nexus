@@ -17,6 +17,7 @@
 | Change Tracker | 80% | ✅ 可用 |
 | PostgreSQL 方言 | 100% | ✅ 完成 |
 | MySQL 方言 (含 Invisible/Downgrade Index) | 100% | ✅ 完成 |
+| MongoDB 方言 | 100% | ✅ 完成 |
 | 事务支持 | 80% | ✅ 可用 |
 | 批量操作 | 80% | ✅ 可用 |
 | 日志框架 | 100% | ✅ 完成 |
@@ -84,7 +85,8 @@ Nexus/
 │   ├── api/                  # DbContext, DbSet, Query Builder, Logger
 │   ├── dialect/             # 数据库方言抽象
 │   │   ├── postgres/        # PostgreSQL 实现
-│   │   └── mysql/           # MySQL 实现 (含 Invisible/Downgrade Index)
+│   │   ├── mysql/           # MySQL 实现 (含 Invisible/Downgrade Index)
+│   │   └── mongodb/         # MongoDB 实现 (含索引/集合管理)
 │   ├── internal/
 │   │   ├── errors/          # 标准化错误处理
 │   │   ├── executor/         # SQL 执行器 + 连接池
@@ -107,7 +109,7 @@ Nexus/
 ## 技术栈
 
 - **语言**: Go 1.22+
-- **数据库**: PostgreSQL ✅, MySQL 8.0+ ✅
+- **数据库**: PostgreSQL ✅, MySQL 8.0+ ✅, MongoDB 7.0+ ✅
 - **测试**: go-sqlmock, MySQL 8.0 (Docker)
 - **依赖**: lib/pq (PostgreSQL), go-sql-driver/mysql
 
