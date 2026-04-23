@@ -7,8 +7,10 @@ import (
 	"flag"
 	"fmt"
 	"go/ast"
+	"go/constant"
 	"go/parser"
 	"go/token"
+	"go/types"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -24,6 +26,7 @@ import (
 	"gore/internal/advisor"
 	"gore/internal/advisor/rules"
 	"gore/internal/migrate"
+	"golang.org/x/tools/go/packages"
 )
 
 type config struct {
@@ -32,6 +35,9 @@ type config struct {
 	dbType    string
 	target    string
 	useStdout bool
+	format    string
+	output    string
+	crossFile bool
 }
 
 type report struct {
@@ -94,6 +100,9 @@ func runCheck(args []string) error {
 	fs.StringVar(&cfg.schema, "schema", "", "path to schema cache JSON")
 	fs.StringVar(&cfg.dbType, "db-type", "postgres", "database type: postgres or mysql")
 	fs.BoolVar(&cfg.useStdout, "stdout", true, "write diagnostics to stdout")
+	fs.StringVar(&cfg.format, "format", "json", "output format: json, text, html, or sarif")
+	fs.StringVar(&cfg.output, "output", "", "output file path (default: stdout)")
+	fs.BoolVar(&cfg.crossFile, "cross-file", false, "enable cross-file constant resolution using go/packages")
 
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -118,6 +127,17 @@ func runCheck(args []string) error {
 		return fmt.Errorf("invalid --db-type: must be 'postgres' or 'mysql', got %q", cfg.dbType)
 	}
 
+	// Validate format
+	validFormats := map[string]bool{"json": true, "text": true, "html": true, "sarif": true}
+	if !validFormats[cfg.format] {
+		return fmt.Errorf("invalid --format: must be 'json', 'text', 'html', or 'sarif', got %q", cfg.format)
+	}
+
+	// For non-stdout formats, disable stdout flag
+	if cfg.output != "" {
+		cfg.useStdout = false
+	}
+
 	schemasByTable := map[string]advisor.TableSchema{}
 	if cfg.schema != "" {
 		loaded, err := loadSchemaCache(cfg.schema)
@@ -137,7 +157,14 @@ func runCheck(args []string) error {
 		schemasByTable = liveSchemas
 	}
 
-	queries, err := extractQueries(cfg.target)
+	var queries []*advisor.QueryMetadata
+	var err error
+
+	if cfg.crossFile {
+		queries, err = extractQueriesWithPackages(cfg.target)
+	} else {
+		queries, err = extractQueries(cfg.target)
+	}
 	if err != nil {
 		return err
 	}
@@ -183,7 +210,7 @@ func runCheck(args []string) error {
 		Stats:       buildStats(suggestions),
 	}
 
-	return writeReport(rep, cfg.useStdout)
+	return writeReport(rep, cfg)
 }
 
 func buildStats(suggestions []advisor.Suggestion) reportStats {
@@ -202,6 +229,333 @@ func buildStats(suggestions []advisor.Suggestion) reportStats {
 		}
 	}
 	return stats
+}
+
+func severityLabel(s advisor.Severity) string {
+	switch s {
+	case advisor.SeverityInfo:
+		return "Info"
+	case advisor.SeverityWarn:
+		return "Warning"
+	case advisor.SeverityHigh:
+		return "High"
+	case advisor.SeverityCritical:
+		return "Critical"
+	default:
+		return "Unknown"
+	}
+}
+
+func severityColor(s advisor.Severity) string {
+	switch s {
+	case advisor.SeverityInfo:
+		return "#17a2b8"
+	case advisor.SeverityWarn:
+		return "#ffc107"
+	case advisor.SeverityHigh:
+		return "#fd7e14"
+	case advisor.SeverityCritical:
+		return "#dc3545"
+	default:
+		return "#6c757d"
+	}
+}
+
+func writeReport(rep report, cfg *config) error {
+	var out *os.File
+	var err error
+
+	if cfg.output != "" {
+		out, err = os.Create(cfg.output)
+		if err != nil {
+			return fmt.Errorf("failed to create output file: %w", err)
+		}
+		defer out.Close()
+	} else if cfg.useStdout {
+		out = os.Stdout
+	} else {
+		out = os.Stderr
+	}
+
+	switch cfg.format {
+	case "json":
+		return writeJSONReport(rep, out)
+	case "text":
+		return writeTextReport(rep, out)
+	case "html":
+		return writeHTMLReport(rep, out)
+	case "sarif":
+		return writeSARIFReport(rep, out)
+	}
+	return nil
+}
+
+func writeJSONReport(rep report, out *os.File) error {
+	data, err := json.MarshalIndent(rep, "", "  ")
+	if err != nil {
+		return err
+	}
+	_, err = out.Write(append(data, '\n'))
+	return err
+}
+
+func writeTextReport(rep report, out *os.File) error {
+	var buf strings.Builder
+	var err error
+
+	buf.WriteString("=== Gore-Lint Report ===\n")
+	buf.WriteString(fmt.Sprintf("Generated: %s\n", rep.GeneratedAt))
+	buf.WriteString(fmt.Sprintf("Target: %s\n", rep.Target))
+	buf.WriteString(fmt.Sprintf("Total Issues: %d\n\n", rep.Stats.Total))
+
+	if rep.Stats.Critical > 0 {
+		buf.WriteString(fmt.Sprintf("  Critical: %d\n", rep.Stats.Critical))
+	}
+	if rep.Stats.High > 0 {
+		buf.WriteString(fmt.Sprintf("  High: %d\n", rep.Stats.High))
+	}
+	if rep.Stats.Warn > 0 {
+		buf.WriteString(fmt.Sprintf("  Warning: %d\n", rep.Stats.Warn))
+	}
+	if rep.Stats.Info > 0 {
+		buf.WriteString(fmt.Sprintf("  Info: %d\n", rep.Stats.Info))
+	}
+
+	buf.WriteString("\n--- Suggestions ---\n\n")
+
+	for _, s := range rep.Suggestions {
+		buf.WriteString(fmt.Sprintf("[%s] %s\n", severityLabel(s.Severity), s.RuleID))
+		buf.WriteString(fmt.Sprintf("  Message: %s\n", s.Message))
+		if s.SourceFile != "" {
+			buf.WriteString(fmt.Sprintf("  Location: %s:%d\n", s.SourceFile, s.LineNumber))
+		}
+		if s.Recommendation != "" {
+			buf.WriteString(fmt.Sprintf("  Recommendation: %s\n", s.Recommendation))
+		}
+		buf.WriteString("\n")
+	}
+
+	_, err = out.WriteString(buf.String())
+	return err
+}
+
+func writeHTMLReport(rep report, out *os.File) error {
+	html := `<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gore-Lint Report</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif; background: #f5f5f5; color: #333; line-height: 1.6; }
+        .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+        .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; border-radius: 8px; margin-bottom: 20px; }
+        .header h1 { font-size: 28px; margin-bottom: 10px; }
+        .header .meta { opacity: 0.9; font-size: 14px; }
+        .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 15px; margin-bottom: 20px; }
+        .stat-card { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); text-align: center; }
+        .stat-card .number { font-size: 36px; font-weight: bold; }
+        .stat-card .label { font-size: 14px; color: #666; text-transform: uppercase; letter-spacing: 1px; }
+        .stat-card.total { border-top: 4px solid #667eea; }
+        .stat-card.critical .number { color: #dc3545; }
+        .stat-card.critical { border-top: 4px solid #dc3545; }
+        .stat-card.high .number { color: #fd7e14; }
+        .stat-card.high { border-top: 4px solid #fd7e14; }
+        .stat-card.warn .number { color: #ffc107; }
+        .stat-card.warn { border-top: 4px solid #ffc107; }
+        .stat-card.info .number { color: #17a2b8; }
+        .stat-card.info { border-top: 4px solid #17a2b8; }
+        .suggestions { background: white; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); overflow: hidden; }
+        .suggestions h2 { padding: 20px; border-bottom: 1px solid #eee; font-size: 18px; }
+        .suggestion { padding: 20px; border-bottom: 1px solid #eee; transition: background 0.2s; }
+        .suggestion:hover { background: #f8f9fa; }
+        .suggestion:last-child { border-bottom: none; }
+        .suggestion-header { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+        .badge { padding: 4px 10px; border-radius: 20px; font-size: 12px; font-weight: bold; color: white; text-transform: uppercase; }
+        .rule-id { font-family: 'Monaco', 'Menlo', monospace; font-size: 13px; color: #666; }
+        .suggestion-message { font-size: 16px; margin-bottom: 10px; }
+        .suggestion-meta { display: flex; gap: 20px; font-size: 13px; color: #666; flex-wrap: wrap; }
+        .suggestion-meta span { display: flex; align-items: center; gap: 5px; }
+        .recommendation { background: #e8f4fd; border-left: 4px solid #17a2b8; padding: 10px 15px; margin-top: 10px; border-radius: 0 4px 4px 0; font-size: 14px; }
+        .reason { color: #666; font-size: 14px; margin-top: 8px; }
+        .empty-state { text-align: center; padding: 60px 20px; color: #666; }
+        .empty-state .icon { font-size: 48px; margin-bottom: 20px; }
+        .footer { text-align: center; padding: 20px; color: #666; font-size: 12px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Gore-Lint Report</h1>
+            <div class="meta">
+                <div>Generated: ` + rep.GeneratedAt + `</div>
+                <div>Target: ` + htmlEscape(rep.Target) + `</div>
+            </div>
+        </div>
+
+        <div class="stats">
+            <div class="stat-card total">
+                <div class="number">` + fmt.Sprintf("%d", rep.Stats.Total) + `</div>
+                <div class="label">Total Issues</div>
+            </div>
+            <div class="stat-card critical">
+                <div class="number">` + fmt.Sprintf("%d", rep.Stats.Critical) + `</div>
+                <div class="label">Critical</div>
+            </div>
+            <div class="stat-card high">
+                <div class="number">` + fmt.Sprintf("%d", rep.Stats.High) + `</div>
+                <div class="label">High</div>
+            </div>
+            <div class="stat-card warn">
+                <div class="number">` + fmt.Sprintf("%d", rep.Stats.Warn) + `</div>
+                <div class="label">Warning</div>
+            </div>
+            <div class="stat-card info">
+                <div class="number">` + fmt.Sprintf("%d", rep.Stats.Info) + `</div>
+                <div class="label">Info</div>
+            </div>
+        </div>
+
+        <div class="suggestions">
+            <h2>Suggestions</h2>`
+	if len(rep.Suggestions) == 0 {
+		html += `
+            <div class="empty-state">
+                <div class="icon">&#10003;</div>
+                <div>No issues found</div>
+            </div>`
+	} else {
+		for _, s := range rep.Suggestions {
+			html += `
+            <div class="suggestion">
+                <div class="suggestion-header">
+                    <span class="badge" style="background-color: ` + severityColor(s.Severity) + `">` + severityLabel(s.Severity) + `</span>
+                    <span class="rule-id">` + htmlEscape(s.RuleID) + `</span>
+                </div>
+                <div class="suggestion-message">` + htmlEscape(s.Message) + `</div>
+                <div class="suggestion-meta">`
+			if s.SourceFile != "" {
+				html += `<span>&#128193; ` + htmlEscape(s.SourceFile) + `:` + fmt.Sprintf("%d", s.LineNumber) + `</span>`
+			}
+			if len(s.Evidence) > 0 {
+				html += `<span>&#128203; ` + htmlEscape(strings.Join(s.Evidence, ", ")) + `</span>`
+			}
+			html += `
+                </div>`
+			if s.Recommendation != "" {
+				html += `
+                <div class="recommendation">&#128161; ` + htmlEscape(s.Recommendation) + `</div>`
+			}
+			if s.Reason != "" {
+				html += `
+                <div class="reason">` + htmlEscape(s.Reason) + `</div>`
+			}
+			html += `
+            </div>`
+		}
+	}
+	html += `
+        </div>
+
+        <div class="footer">
+            Generated by Gore-Lint v` + rep.Version + `
+        </div>
+    </div>
+</body>
+</html>`
+
+	_, err := out.WriteString(html)
+	return err
+}
+
+func htmlEscape(s string) string {
+	var buf strings.Builder
+	for _, r := range s {
+		switch r {
+		case '&':
+			buf.WriteString("&amp;")
+		case '<':
+			buf.WriteString("&lt;")
+		case '>':
+			buf.WriteString("&gt;")
+		case '"':
+			buf.WriteString("&quot;")
+		case '\'':
+			buf.WriteString("&#39;")
+		default:
+			buf.WriteRune(r)
+		}
+	}
+	return buf.String()
+}
+
+func writeSARIFReport(rep report, out *os.File) error {
+	sarif := map[string]any{
+		"$schema": "https://docs.oasis-open.org/sarif/sarif/v2.1.0/sarif-v2.1.0.json",
+		"version": "2.1.0",
+		"runs": []map[string]any{
+			{
+				"tool": map[string]any{
+					"driver": map[string]any{
+						"name":           "gore-lint",
+						"version":        rep.Version,
+						"informationUri": "https://github.com/your-org/gore",
+					},
+				},
+				"results": buildSARIFResults(rep.Suggestions),
+			},
+		},
+	}
+
+	data, err := json.MarshalIndent(sarif, "", "  ")
+	if err != nil {
+		return err
+	}
+	_, err = out.Write(append(data, '\n'))
+	return err
+}
+
+func buildSARIFResults(suggestions []advisor.Suggestion) []map[string]any {
+	var results []map[string]any
+	for _, s := range suggestions {
+		level := "note"
+		switch s.Severity {
+		case advisor.SeverityCritical, advisor.SeverityHigh:
+			level = "error"
+		case advisor.SeverityWarn:
+			level = "warning"
+		}
+
+		result := map[string]any{
+			"ruleId":    s.RuleID,
+			"level":     level,
+			"message":   map[string]any{"text": s.Message},
+			"locations": buildSARIFLocations(s),
+		}
+		results = append(results, result)
+	}
+	return results
+}
+
+func buildSARIFLocations(s advisor.Suggestion) []map[string]any {
+	if s.SourceFile == "" {
+		return []map[string]any{
+			{
+				"physicalLocation": map[string]any{
+					"artifactLocation": map[string]any{"uri": "unknown"},
+				},
+			},
+		}
+	}
+	return []map[string]any{
+		{
+			"physicalLocation": map[string]any{
+				"artifactLocation": map[string]any{"uri": s.SourceFile},
+				"region":          map[string]any{"startLine": s.LineNumber},
+			},
+		},
+	}
 }
 
 func extractQueries(target string) ([]*advisor.QueryMetadata, error) {
@@ -242,6 +596,142 @@ func extractQueries(target string) ([]*advisor.QueryMetadata, error) {
 	}
 
 	return out, nil
+}
+
+// extractQueriesWithPackages uses go/packages to load the entire package
+// and resolve constants across files.
+func extractQueriesWithPackages(target string) ([]*advisor.QueryMetadata, error) {
+	cfg := &packages.Config{
+		Fset: token.NewFileSet(),
+		Mode: packages.NeedSyntax | packages.NeedTypesInfo,
+	}
+
+	// Determine the package path from target
+	// Handle both package paths (e.g., "./...") and directory paths
+	pkgPath := target
+	if strings.HasSuffix(target, "/...") || strings.HasSuffix(target, "\\...") {
+		pkgPath = strings.TrimSuffix(target, "/...")
+		pkgPath = strings.TrimSuffix(pkgPath, "\\...")
+	}
+
+	// If target looks like a path, convert to package pattern
+	if !strings.Contains(pkgPath, ".") {
+		pkgPath = "./" + pkgPath
+	}
+	if !strings.HasSuffix(pkgPath, "/...") && !strings.HasSuffix(pkgPath, "\\...") {
+		pkgPath = pkgPath + "/..."
+	}
+
+	pkgs, err := packages.Load(cfg, pkgPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load packages: %w", err)
+	}
+
+	// Collect all constants from all packages
+	allConsts := make(map[string]literalValue)
+
+	for _, pkg := range pkgs {
+		for _, syntax := range pkg.Syntax {
+			consts := collectFileLiteralsWithTypes(syntax, pkg.TypesInfo, allConsts)
+			for k, v := range consts {
+				allConsts[k] = v
+			}
+		}
+	}
+
+	// Now extract queries using the collected constants
+	fset := cfg.Fset
+	seen := map[string]struct{}{}
+	var out []*advisor.QueryMetadata
+
+	for _, pkg := range pkgs {
+		for i, syntax := range pkg.Syntax {
+			filePath := pkg.Syntax[i].Pos()
+			path := fset.Position(filePath).Filename
+
+			ast.Inspect(syntax, func(n ast.Node) bool {
+				call, ok := n.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+
+				meta, key := buildQueryMetadata(call, fset, path, allConsts)
+				if meta == nil || key == "" {
+					return true
+				}
+				if _, exists := seen[key]; exists {
+					return true
+				}
+
+				seen[key] = struct{}{}
+				out = append(out, meta)
+				return true
+			})
+		}
+	}
+
+	return out, nil
+}
+
+// collectFileLiteralsWithTypes collects literal values from a file
+// using type information to resolve constants.
+func collectFileLiteralsWithTypes(file *ast.File, info *types.Info, globalConsts map[string]literalValue) map[string]literalValue {
+	values := make(map[string]literalValue)
+
+	for _, decl := range file.Decls {
+		gen, ok := decl.(*ast.GenDecl)
+		if !ok || (gen.Tok != token.CONST && gen.Tok != token.VAR) {
+			continue
+		}
+		for _, spec := range gen.Specs {
+			valueSpec, ok := spec.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			for i, name := range valueSpec.Names {
+				if i >= len(valueSpec.Values) {
+					continue
+				}
+				lit, ok := evalLiteral(valueSpec.Values[i], values)
+				if !ok {
+					// Try to get from type info
+					if ident, ok := valueSpec.Values[i].(*ast.Ident); ok {
+						if constObj := info.ObjectOf(ident); constObj != nil {
+							if c := constObj.(*types.Const); c != nil {
+								lit = typeConstToLiteral(c)
+								ok = lit.value != nil
+							}
+						}
+					}
+				}
+				if ok {
+					values[name.Name] = lit
+				}
+			}
+		}
+	}
+	return values
+}
+
+// typeConstToLiteral converts a types.Const to literalValue.
+func typeConstToLiteral(c *types.Const) literalValue {
+	switch constant.BoolVal(c.Val()) {
+	case true, false:
+		return literalValue{value: constant.BoolVal(c.Val()), kind: "bool"}
+	}
+	switch c.Val().Kind() {
+	case constant.Int:
+		if v, ok := constant.Int64Val(c.Val()); ok {
+			return literalValue{value: v, kind: "int"}
+		}
+	case constant.String:
+		return literalValue{value: constant.StringVal(c.Val()), kind: "string"}
+	case constant.Float:
+		if v, ok := constant.Float64Val(c.Val()); ok {
+			return literalValue{value: v, kind: "float"}
+		}
+	}
+	return literalValue{}
 }
 
 func collectFileLiterals(file *ast.File) map[string]literalValue {
@@ -647,21 +1137,6 @@ func loadSchemaCache(path string) (schemaCache, error) {
 	return cache, nil
 }
 
-func writeReport(rep report, useStdout bool) error {
-	data, err := json.MarshalIndent(rep, "", "  ")
-	if err != nil {
-		return err
-	}
-
-	out := os.Stdout
-	if !useStdout {
-		out = os.Stderr
-	}
-
-	_, err = out.Write(append(data, '\n'))
-	return err
-}
-
 func loadLiveSchema(dsn, dbType string) (map[string]advisor.TableSchema, error) {
 	db, err := sql.Open(dbType, dsn)
 	if err != nil {
@@ -999,7 +1474,7 @@ func runMigrateStatus(args []string) error {
 
 func printUsage() {
 	fmt.Fprintln(os.Stderr, "Usage:")
-	fmt.Fprintln(os.Stderr, "  gore-lint check [--dsn <dsn> | --schema <file>] [--db-type <type>] [--stdout] <target>")
+	fmt.Fprintln(os.Stderr, "  gore-lint check [--dsn <dsn> | --schema <file>] [--db-type <type>] [--format <format>] [--output <file>] [--cross-file] <target>")
 	fmt.Fprintln(os.Stderr, "  gore-lint migrate <subcommand> [flags]")
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "Commands:")
@@ -1014,6 +1489,9 @@ func printUsage() {
 	fmt.Fprintln(os.Stderr, "  --schema <file>      path to schema cache JSON")
 	fmt.Fprintln(os.Stderr, "  --db-type <type>     database type: postgres or mysql (default: postgres)")
 	fmt.Fprintln(os.Stderr, "  --stdout             write diagnostics to stdout (default: true)")
+	fmt.Fprintln(os.Stderr, "  --format <format>    output format: json, text, html, or sarif (default: json)")
+	fmt.Fprintln(os.Stderr, "  --output <file>      output file path (default: stdout)")
+	fmt.Fprintln(os.Stderr, "  --cross-file         enable cross-file constant resolution using go/packages")
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "Migrate Flags:")
 	fmt.Fprintln(os.Stderr, "  --dsn <dsn>          database DSN (required for up/down/status)")

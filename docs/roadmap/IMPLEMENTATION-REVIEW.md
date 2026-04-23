@@ -108,13 +108,15 @@ func hasIndexOn(indexes []advisor.IndexInfo, field string) bool {
 | `--schema <file>` | 离线 Schema JSON | ✅ 完整 | `main.go:loadSchemaCache()` |
 | `--format json` | JSON 报告 | ✅ 完整 | `main.go:writeReport()` |
 | `--format text` | 人类可读报告 | ✅ 完整 | `main.go:writeTextReport()` |
+| `--format html` | 可视化 HTML 报告 | ✅ 完整 | `main.go:writeHTMLReport()` |
 | `--format sarif` | GitHub SARIF 格式 | ✅ 完整 | `main.go:writeSARIFReport()` |
+| `--output <file>` | 输出文件路径 | ✅ 完整 | `main.go:writeReport()` |
+| `--cross-file` | 跨文件常量解析 | ✅ 完整 | `main.go:extractQueriesWithPackages()` |
 | `--exclude <path>` | 路径排除 | ✅ 完整 | `main.go:walkGoFiles()` |
 | `--stdout` | 输出到 stdout | ✅ 完整 | `main.go` |
 | `gore-lint schema dump` | 导出 Schema | ✅ 完整 | `main.go:runSchemaDump()` |
 | `gore-lint schema validate` | 验证 Schema | ✅ 完整 | `main.go:runSchemaValidate()` |
 | `gore-lint schema merge` | 合并 Schema | ✅ 完整 | `main.go:runSchemaMerge()` |
-| `--format html` | 可视化报告 | ❌ 未实现 | - |
 | `gore-lint doctor` | 健康检查 | ❌ 未实现 | - |
 
 ### 3.2 AST 静态分析能力
@@ -133,7 +135,7 @@ func hasIndexOn(indexes []advisor.IndexInfo, field string) bool {
 | 函数调用 (`LOWER(name)`) | 函数检测 | ✅ (Bug 已修复) |
 | `!=`, `<>` 否定操作符 | 否定条件 | ✅ |
 | 变量引用 | `var table = ...` | ❌ 无法静态解析 |
-| 跨文件常量 | const 定义在别的文件 | ❌ 仅文件内 |
+| 跨文件常量 | const 定义在别的文件 | ✅ 已实现 (--cross-file) |
 | `GroupBy` 字段 | 分组字段提取 | ❌ 未实现 |
 | `Distinct` 标记 | 去重标记 | ❌ 未实现 |
 | 嵌套函数调用 | `FOO(BAR(x))` | ❌ 未实现 |
@@ -230,13 +232,13 @@ func hasIndexOn(indexes []advisor.IndexInfo, field string) bool {
 
 ### 6.3 🟠 Phase 3 企业级集成 (P2)
 
-| 功能 | 优先级 | 说明 |
-|------|--------|------|
-| HTML 报告 | P2 | 可视化报告 |
-| CI/CD 模板 | P2 | GitHub Actions / GitLab CI |
-| go/packages 跨文件解析 | P2 | 支持跨文件常量 |
-| 规则禁用配置 | P2 | `gore-lint.yaml` |
-| `gore-lint doctor` | P3 | 健康检查 |
+| 功能 | 优先级 | 说明 | 状态 |
+|------|--------|------|------|
+| HTML 报告 | P2 | 可视化报告 | ✅ 已完成 |
+| CI/CD 模板 | P2 | GitHub Actions / GitLab CI | ⏳ 待开始 |
+| go/packages 跨文件解析 | P2 | 支持跨文件常量 | ✅ 已完成 |
+| 规则禁用配置 | P2 | `gore-lint.yaml` | ⏳ 待开始 |
+| `gore-lint doctor` | P3 | 健康检查 | ⏳ 待开始 |
 
 ---
 
@@ -262,14 +264,14 @@ func hasIndexOn(indexes []advisor.IndexInfo, field string) bool {
 
 ### Phase 4.3: 企业级集成 (预计 5 天)
 
-| 序号 | 任务 | 优先级 | 说明 |
-|------|------|--------|------|
-| 1 | HTML 报告生成 | P2 | 可视化报告输出 |
-| 2 | GitHub Actions 模板 | P2 | `.github/workflows/gore-lint.yml` |
-| 3 | GitLab CI 模板 | P2 | `.gitlab-ci.yml` |
-| 4 | go/packages 跨文件解析 | P2 | 替代 go/parser |
-| 5 | 规则禁用配置 | P2 | `gore-lint.yaml` |
-| 6 | `gore-lint doctor` | P3 | DSN 连接检查、Schema 有效性 |
+| 序号 | 任务 | 优先级 | 说明 | 状态 |
+|------|------|--------|------|------|
+| 1 | HTML 报告生成 | P2 | 可视化报告输出 | ✅ 已完成 |
+| 2 | GitHub Actions 模板 | P2 | `.github/workflows/gore-lint.yml` | ⏳ 待开始 |
+| 3 | GitLab CI 模板 | P2 | `.gitlab-ci.yml` | ⏳ 待开始 |
+| 4 | go/packages 跨文件解析 | P2 | 替代 go/parser | ✅ 已完成 |
+| 5 | 规则禁用配置 | P2 | `gore-lint.yaml` | ⏳ 待开始 |
+| 6 | `gore-lint doctor` | P3 | DSN 连接检查、Schema 有效性 | ⏳ 待开始 |
 
 ### Phase 4.4: 高级特性 (预计 7 天)
 
