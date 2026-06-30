@@ -2,6 +2,7 @@ package tracker
 
 import (
 	"reflect"
+	"sync"
 
 	goreerrors "gore/internal/errors"
 )
@@ -26,6 +27,7 @@ type Entry struct {
 
 // Tracker manages entity snapshots and states.
 type Tracker struct {
+	mu      sync.RWMutex
 	entries map[uintptr]*Entry
 }
 
@@ -50,7 +52,9 @@ func (t *Tracker) Attach(entity any) (*Entry, error) {
 		Changes:  make(map[string]any),
 	}
 
+	t.mu.Lock()
 	t.entries[ptr] = entry
+	t.mu.Unlock()
 	return entry, nil
 }
 
@@ -68,7 +72,9 @@ func (t *Tracker) MarkAdded(entity any) (*Entry, error) {
 		Changes:  make(map[string]any),
 	}
 
+	t.mu.Lock()
 	t.entries[ptr] = entry
+	t.mu.Unlock()
 	return entry, nil
 }
 
@@ -84,13 +90,18 @@ func (t *Tracker) MarkDeleted(entity any) (*Entry, error) {
 		State:  StateDeleted,
 	}
 
+	t.mu.Lock()
 	t.entries[ptr] = entry
+	t.mu.Unlock()
 	return entry, nil
 }
 
 // DetectChanges diffs current entity values against snapshots.
 func (t *Tracker) DetectChanges() ([]*Entry, error) {
 	var changed []*Entry
+
+	t.mu.Lock()
+	defer t.mu.Unlock()
 
 	for _, entry := range t.entries {
 		if entry.State == StateAdded || entry.State == StateDeleted {
@@ -121,11 +132,15 @@ func (t *Tracker) DetectChanges() ([]*Entry, error) {
 
 // Clear removes all tracked entries.
 func (t *Tracker) Clear() {
+	t.mu.Lock()
 	t.entries = make(map[uintptr]*Entry)
+	t.mu.Unlock()
 }
 
 // Entries returns the tracked entries.
 func (t *Tracker) Entries() []*Entry {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
 	out := make([]*Entry, 0, len(t.entries))
 	for _, entry := range t.entries {
 		out = append(out, entry)
